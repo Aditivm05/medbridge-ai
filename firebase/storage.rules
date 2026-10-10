@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Deny all direct client read/write by default.
+    // All clinical document uploads and reads are routed through short-lived signed URLs
+    // issued by the backend server after strict authorization and magic-byte checks.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

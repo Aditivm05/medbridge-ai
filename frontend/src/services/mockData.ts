@@ -1,0 +1,260 @@
+import { CaseData, ClinicianData, DoctorBriefData, DocumentData } from '../types';
+
+export const mockClinicians: ClinicianData[] = [
+  {
+    clinicianId: 'demo_doc_patil',
+    fullName: 'Dr. Rajesh Patil [DEMO / SIMULATED]',
+    licenseNumber: 'MMC-SIM-91823',
+    specialty: 'emergency_medicine',
+    languages: ['en', 'mr', 'hi'],
+    verificationStatus: 'verified',
+    availability: 'available',
+    isDemo: true,
+    currentCaseId: null,
+  },
+  {
+    clinicianId: 'demo_doc_sharma',
+    fullName: 'Dr. Ananya Sharma [DEMO / SIMULATED]',
+    licenseNumber: 'MCI-SIM-48201',
+    specialty: 'general_medicine',
+    languages: ['en', 'hi'],
+    verificationStatus: 'verified',
+    availability: 'available',
+    isDemo: true,
+    currentCaseId: null,
+  },
+  {
+    clinicianId: 'demo_doc_deshmukh',
+    fullName: 'Dr. Priya Deshmukh [DEMO / SIMULATED]',
+    licenseNumber: 'MMC-SIM-10492',
+    specialty: 'pediatrics',
+    languages: ['en', 'mr'],
+    verificationStatus: 'verified',
+    availability: 'available',
+    isDemo: true,
+    currentCaseId: null,
+  },
+];
+
+export const sampleSyntheticDocuments: Record<string, DocumentData> = {
+  cbc_pdf: {
+    documentId: 'doc_synth_cbc_01',
+    caseId: 'case_demo_urgent_01',
+    fileName: 'Synthetic_Blood_Count_Report.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 420800,
+    uploadedAt: '2026-10-09T10:15:00Z',
+    magicBytesValidated: true,
+    ocrStatus: 'processed',
+    extractedText: `SYNTHETIC LAB REPORT [DEMO ONLY]
+PATIENT: Ramesh K. | AGE: 38 | GENDER: Male
+DATE: 09-OCT-2026 09:30 AM
+COMPLETE BLOOD COUNT (CBC):
+- Hemoglobin: 13.8 g/dL (Normal: 13.0 - 17.0)
+- Total Leukocyte Count (WBC): 14,800 /µL [ELEVATED] (Normal: 4,000 - 11,000)
+- Neutrophils: 78 % [ELEVATED] (Normal: 40 - 70)
+- Lymphocytes: 16 % (Normal: 20 - 40)
+- Platelet Count: 225,000 /µL (Normal: 150,000 - 450,000)
+- C-Reactive Protein (CRP): 42 mg/L [ELEVATED] (Normal: < 5.0)
+IMPRESSION: Marked neutrophilic leukocytosis and elevated CRP suggesting acute inflammation/infection.`,
+  },
+  xray_jpg: {
+    documentId: 'doc_synth_xray_02',
+    caseId: 'case_demo_urgent_01',
+    fileName: 'Synthetic_Abdominal_Ultrasound_Note.jpg',
+    mimeType: 'image/jpeg',
+    sizeBytes: 812000,
+    uploadedAt: '2026-10-09T10:20:00Z',
+    magicBytesValidated: true,
+    ocrStatus: 'processed',
+    extractedText: `SYNTHETIC IMAGING NOTE [DEMO ONLY]
+FINDINGS: Mild mesenteric lymphadenopathy noted in right iliac fossa. Appendix partially visualized with minimal surrounding fluid cuff (6.4 mm diameter). Correlate clinically.`,
+  },
+};
+
+export const sampleDoctorBrief: DoctorBriefData = {
+  briefId: 'brief_synth_01',
+  caseId: 'case_demo_urgent_01',
+  schemaVersion: '1.0',
+  isDraft: false,
+  patientReported: {
+    chiefComplaint: 'Acute onset of high fever (102.5°F) with sharp lower right abdominal pain and nausea',
+    symptoms: ['High fever (102.5°F)', 'Lower right quadrant abdominal pain', 'Nausea and loss of appetite', 'Chills'],
+    timelineDuration: 'Started 36 hours ago, progressively worsening',
+    knownMedicalConditions: ['Mild hypertension (controlled)'],
+    currentMedications: ['Amlodipine 5mg OD'],
+    allergies: ['Penicillin (mild cutaneous rash)'],
+  },
+  extractedFacts: [
+    {
+      fact: 'Total Leukocyte Count (WBC)',
+      value: '14,800',
+      unit: '/µL',
+      sourceDocumentId: 'doc_synth_cbc_01',
+      pageNumber: 1,
+    },
+    {
+      fact: 'Neutrophil Percentage',
+      value: '78',
+      unit: '%',
+      sourceDocumentId: 'doc_synth_cbc_01',
+      pageNumber: 1,
+    },
+    {
+      fact: 'C-Reactive Protein (CRP)',
+      value: '42',
+      unit: 'mg/L',
+      sourceDocumentId: 'doc_synth_cbc_01',
+      pageNumber: 1,
+    },
+    {
+      fact: 'Appendix Diameter (Ultrasound)',
+      value: '6.4',
+      unit: 'mm',
+      sourceDocumentId: 'doc_synth_xray_02',
+      pageNumber: 1,
+    },
+  ],
+  unknowns: [
+    'Exact fasting duration prior to abdominal pain onset (Unknown)',
+    'Presence of bowel movements in last 24 hours (Unknown)',
+    'Prior history of similar abdominal attacks (Unknown)',
+  ],
+  unitsPreserved: true,
+  missingInformation: [
+    'Urinary symptoms (dysuria, hematuria) not reported by patient',
+    'Recent travel or contaminated food exposure unverified',
+  ],
+  clarificationQuestions: [
+    'Does the abdominal pain worsen upon sudden movement, coughing, or releasing pressure (rebound tenderness)?',
+    'Have you vomited, or is the sensation purely nausea?',
+    'Has the fever responded to paracetamol, and if so, what dosage was taken?',
+  ],
+  sources: [
+    {
+      sourceType: 'patient_input',
+      sourceId: 'patient_intake_form',
+      referenceText: 'Patient reported symptoms, duration of 36 hours, and allergy to Penicillin.',
+    },
+    {
+      sourceType: 'document',
+      sourceId: 'Synthetic_Blood_Count_Report.pdf',
+      referenceText: 'Page 1: WBC 14,800 /µL, CRP 42 mg/L',
+      pageNumber: 1,
+    },
+    {
+      sourceType: 'document',
+      sourceId: 'Synthetic_Abdominal_Ultrasound_Note.jpg',
+      referenceText: 'Page 1: Appendix diameter 6.4 mm with peri-appendiceal fluid',
+      pageNumber: 1,
+    },
+  ],
+  patientReview: {
+    status: 'approved',
+    corrections: null,
+    reviewedAt: '2026-10-09T10:30:00Z',
+  },
+  clinicianReview: {
+    status: 'pending',
+    clinicianNotes: null,
+    reviewedAt: null,
+  },
+  disclaimer:
+    'CONFIDENTIAL CARE COORDINATION BRIEF ONLY. THIS IS NOT A MEDICAL DIAGNOSIS OR PRESCRIPTION. ALL MEDICAL DECISIONS REST ENTIRELY WITH THE LICENSED CLINICIAN.',
+  createdAt: '2026-10-09T10:25:00Z',
+  updatedAt: '2026-10-09T10:30:00Z',
+};
+
+export const initialMockCases: CaseData[] = [
+  {
+    caseId: 'case_demo_urgent_01',
+    patientId: 'patient_demo_ramesh',
+    assignedClinicianId: null,
+    assignedClinicianName: null,
+    requestedUrgency: 'urgent',
+    status: 'MATCHING',
+    idempotencyKey: 'idem_synth_001_initial',
+    chiefComplaint: 'Acute onset of high fever (102.5°F) with sharp lower right abdominal pain and nausea',
+    duration: '36 hours',
+    patientLanguage: 'hi',
+    documentCount: 2,
+    doctorBriefId: 'brief_synth_01',
+    doctorBrief: sampleDoctorBrief,
+    documents: [sampleSyntheticDocuments.cbc_pdf, sampleSyntheticDocuments.xray_jpg],
+    consultationId: null,
+    consultation: null,
+    followUp: null,
+    createdAt: '2026-10-09T10:10:00Z',
+    updatedAt: '2026-10-09T10:30:00Z',
+    submittedAt: '2026-10-09T10:30:00Z',
+  },
+  {
+    caseId: 'case_demo_accepted_02',
+    patientId: 'patient_demo_sunita',
+    assignedClinicianId: 'demo_doc_sharma',
+    assignedClinicianName: 'Dr. Ananya Sharma [DEMO / SIMULATED]',
+    requestedUrgency: 'urgent',
+    status: 'ACCEPTED',
+    idempotencyKey: 'idem_synth_002_initial',
+    chiefComplaint: 'Severe throbbing hemicranial headache with photophobia and persistent dizziness',
+    duration: '18 hours',
+    patientLanguage: 'en',
+    documentCount: 0,
+    doctorBriefId: null,
+    doctorBrief: null,
+    documents: [],
+    consultationId: null,
+    consultation: null,
+    followUp: null,
+    createdAt: '2026-10-09T08:30:00Z',
+    updatedAt: '2026-10-09T09:00:00Z',
+    submittedAt: '2026-10-09T08:45:00Z',
+    acceptedAt: '2026-10-09T09:00:00Z',
+  },
+  {
+    caseId: 'case_demo_completed_03',
+    patientId: 'patient_demo_vikram',
+    assignedClinicianId: 'demo_doc_patil',
+    assignedClinicianName: 'Dr. Rajesh Patil [DEMO / SIMULATED]',
+    requestedUrgency: 'routine',
+    status: 'COMPLETED',
+    idempotencyKey: 'idem_synth_003_initial',
+    chiefComplaint: 'Persistent dry nocturnal cough following viral influenza with mild retrosternal irritation',
+    duration: '7 days',
+    patientLanguage: 'mr',
+    documentCount: 1,
+    doctorBriefId: 'brief_synth_03',
+    consultationId: 'consult_synth_03',
+    consultation: {
+      consultationId: 'consult_synth_03',
+      caseId: 'case_demo_completed_03',
+      clinicianId: 'demo_doc_patil',
+      clinicianName: 'Dr. Rajesh Patil [DEMO / SIMULATED]',
+      consultationType: 'text_based_consultation_simulated',
+      isSimulated: true,
+      clinicianNotes:
+        'Patient reports post-viral bronchial hyperreactivity. Clear lung sounds without wheezing or crackles on report review. No hemoptysis, night sweats, or red flags for pneumonia.',
+      provisionalCareAdvice:
+        'Warm steam inhalation twice daily. Adequate oral hydration (2.5L/day). Avoid cold beverages and air pollutants. Over-the-counter honey-based lozenges may soothe irritation.',
+      startedAt: '2026-10-08T14:00:00Z',
+      endedAt: '2026-10-08T14:20:00Z',
+    },
+    followUp: {
+      followUpId: 'followup_synth_03',
+      caseId: 'case_demo_completed_03',
+      patientId: 'patient_demo_vikram',
+      clinicianId: 'demo_doc_patil',
+      required: true,
+      recommendedDate: '2026-10-15',
+      status: 'scheduled',
+      instructions:
+        'If cough worsens with purulent sputum, breathlessness, or fever spikes above 100.4°F, report immediately to a local physician for chest radiography.',
+      createdAt: '2026-10-08T14:20:00Z',
+    },
+    createdAt: '2026-10-08T13:00:00Z',
+    updatedAt: '2026-10-08T14:20:00Z',
+    submittedAt: '2026-10-08T13:15:00Z',
+    acceptedAt: '2026-10-08T13:45:00Z',
+    completedAt: '2026-10-08T14:20:00Z',
+  },
+];

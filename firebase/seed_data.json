@@ -1,0 +1,40 @@
+{
+  "clinicians": [
+    {
+      "clinicianId": "demo_doc_sharma",
+      "userId": "user_demo_doc_sharma",
+      "fullName": "Dr. Ananya Sharma [DEMO / SIMULATED]",
+      "licenseNumber": "MCI-SIM-48201",
+      "specialty": "general_medicine",
+      "languages": ["en", "hi"],
+      "verificationStatus": "verified",
+      "availability": "available",
+      "isDemo": true,
+      "currentCaseId": null
+    },
+    {
+      "clinicianId": "demo_doc_patil",
+      "userId": "user_demo_doc_patil",
+      "fullName": "Dr. Rajesh Patil [DEMO / SIMULATED]",
+      "licenseNumber": "MMC-SIM-91823",
+      "specialty": "emergency_medicine",
+      "languages": ["en", "mr", "hi"],
+      "verificationStatus": "verified",
+      "availability": "available",
+      "isDemo": true,
+      "currentCaseId": null
+    },
+    {
+      "clinicianId": "demo_doc_deshmukh",
+      "userId": "user_demo_doc_deshmukh",
+      "fullName": "Dr. Priya Deshmukh [DEMO / SIMULATED]",
+      "licenseNumber": "MMC-SIM-10492",
+      "specialty": "pediatrics",
+      "languages": ["en", "mr"],
+      "verificationStatus": "verified",
+      "availability": "available",
+      "isDemo": true,
+      "currentCaseId": null
+    }
+  ]
+}

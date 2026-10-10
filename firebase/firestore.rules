@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isClinician() {
+      return isAuthenticated() && request.auth.token.role == 'clinician';
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.role == 'admin';
+    }
+
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Users Collection: Users can manage their own profile
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // Patients Collection: Patient profile
+    match /patients/{patientId} {
+      allow read: if isOwner(patientId) || isClinician() || isAdmin();
+      allow write: if isOwner(patientId) || isAdmin();
+    }
+
+    // Clinicians Collection: Publicly visible for active demo doctors; editable only by owner/admin
+    match /clinicians/{clinicianId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(clinicianId) || isAdmin();
+    }
+
+    // Cases Collection
+    match /cases/{caseId} {
+      // Patients read their own cases; clinicians read matching pool or their assigned cases
+      allow read: if isAuthenticated() && (
+        resource.data.patientId == request.auth.uid ||
+        (isClinician() && (resource.data.status == 'MATCHING' || resource.data.assignedClinicianId == request.auth.uid)) ||
+        isAdmin()
+      );
+      // Patients can create drafts; updates are mediated through server APIs for concurrency safety
+      allow create: if isAuthenticated() && request.resource.data.patientId == request.auth.uid;
+      allow update, delete: if isAdmin(); // Server Admin SDK performs transactions
+    }
+
+    // Documents Collection
+    match /cases/{caseId}/documents/{documentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin(); // Managed via server-side signed URL verification
+    }
+
+    // Doctor Briefs Collection
+    match /doctorBriefs/{briefId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin(); // Generated and updated via backend AI pipeline
+    }
+
+    // Consultations Collection
+    match /consultations/{consultationId} {
+      allow read: if isAuthenticated();
+      allow write: if isClinician() || isAdmin();
+    }
+
+    // Follow-ups Collection
+    match /followUps/{followUpId} {
+      allow read: if isAuthenticated();
+      allow write: if isClinician() || isAdmin();
+    }
+
+    // Audit Events: Append-only by server/authenticated users, never editable or deletable
+    match /auditEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Append-only audit integrity
+    }
+  }
+}
