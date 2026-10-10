@@ -15,6 +15,10 @@ MedBridge AI bridges patients experiencing acute or urgent health concerns to ve
 - **Simulation Transparency:** All demo clinicians, mock availability, and text-based consultations are visibly stamped with `[DEMO / SIMULATED]`.
 - **Multilingual Support:** Fully localized in English, Hindi (हिन्दी), and Marathi (मराठी).
 
+> [!CAUTION]
+> **Synthetic Documents Notice & Data Privacy Boundary:**
+> MedBridge AI is designed and evaluated strictly using synthetic healthcare documents and simulated patient profiles. Real patient medical records, protected health information (PHI), or sensitive clinical documents must **NEVER** be submitted to external AI APIs without an institutional privacy review, explicit patient consent, and enterprise compliance safeguards (e.g. HIPAA BAA, GDPR). All AI-extracted data is tagged with `extractionSource: "AI_EXTRACTED"` and requires human clinician review.
+
 ---
 
 ## 2. High-Level Architecture

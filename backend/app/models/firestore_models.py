@@ -101,6 +101,7 @@ def document_to_firestore_dict(doc: DocumentResponse) -> Dict[str, Any]:
                 "text": p["text"],
                 "charCount": p["charCount"],
                 "status": p["status"].value if hasattr(p["status"], "value") else str(p["status"]),
+                "source": p.get("source", "PDF_TEXT"),
             }
             for p in data["pages"]
         ]

@@ -320,11 +320,48 @@ def get_document_extracted_text(
         documentId=doc.documentId,
         caseId=doc.caseId,
         extractionStatus=doc.extractionStatus,
+        extractionSource=doc.extractionSource,
+        requiresHumanReview=doc.requiresHumanReview,
         pageCount=doc.pageCount,
         pages=doc.pages,
+        extractedFields=doc.extractedFields,
         fullText=doc.extractedText,
         errorMessage=doc.errorMessage,
         extractedAt=doc.extractedAt,
+    )
+
+
+@router.post("/{document_id}/ocr", response_model=DocumentResponse)
+def trigger_document_ocr(
+    case_id: str,
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Explicitly triggers Gemini multimodal OCR for a document.
+    Enforces patient ownership / clinician assignment gates.
+    """
+    try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    check_case_ownership(case.patientId, current_user)
+
+    doc = document_service.get_document(document_id, case_id=case_id)
+    if not doc or doc.caseId != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found for case '{case_id}'.",
+        )
+
+    return document_service.process_gemini_ocr(
+        document_id=document_id,
+        case_id=case_id,
+        actor_id=current_user.uid,
+        actor_role=current_user.role,
     )
 
 

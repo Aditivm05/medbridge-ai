@@ -9,7 +9,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
 - [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix Firestore persistence & Storage uploads Verified (manual, emulator, 10 Oct 2026); Phase 6d Signed-URL & Stream Access Implemented (18/18 pytest passing); Stream endpoint on real emulator marked UNVERIFIED until manual run; Firestore transactions UNVERIFIED until Phase 8)*
+- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c, 6d Completed; Phase 6e Gemini Multimodal OCR Implemented (13/13 tests passing, 77/77 backend suite passing); Real-Gemini extraction marked UNVERIFIED until manual run; Stream endpoint on real emulator marked UNVERIFIED; Firestore transactions UNVERIFIED until Phase 8)*
 - [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
 
 ## 3. Files Created Across Phases 1 - 5
@@ -33,9 +33,11 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/models/firestore_models.py`: Firestore snapshot serializers, Timestamp converters, and enum parsers.
 - `backend/app/schemas/`: Pydantic schemas for `case.py` (with `CaseUpdate` and `CaseSubmitRequest`), `audit.py` (full lifecycle events), `user.py`, `patient.py`, `clinician.py`, `document.py`, `doctor_brief.py`, `consultation.py`.
 - `backend/app/services/case_service.py`: Service layer with complete Case CRUD, draft-only update guard, idempotent submit, and atomic concurrency locking.
-- `backend/app/services/document_service.py`: Extraction service per-page (`pypdf`), low-text `NEEDS_OCR` tagging, encrypted/corrupted/page-limit safeguards (30 pages max), audit events.
+- `backend/app/services/document_service.py`: Extraction service per-page (`pypdf`), low-text `NEEDS_OCR` tagging, encrypted/corrupted/page-limit safeguards (30 pages max), audit events, and Phase 6e Gemini multimodal OCR pipeline.
+- `backend/app/services/gemini_service.py`: Multimodal Gemini OCR service with strict data-only prompt, Pydantic validation, exponential backoff on 429/5xx, and synthetic data notices.
 - `backend/app/services/audit_service.py`: Append-only audit logger.
-- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, text retrieval), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/tests/test_phase6e_gemini_ocr_extraction.py`: Automated Phase 6e OCR test suite (13 tests: success, malformed JSON, 429/5xx retries, 400 no-retry, missing/invalid key, timeout, prompt injection data safety, pypdf text preservation, duplicate trigger guard, RBAC).
 - `backend/tests/test_phase6d_signed_url_access.py`: Automated signed URL & streaming access test suite (RBAC owner/clinician/admin, 403 status gates, token swap & expiry rejection, header security, zero-token audit logging).
 - `backend/tests/test_phase6c_pdf_text_extraction.py`: Automated PDF text extraction test suite (single-page, multi-page, empty/scanned, corrupted, encrypted, oversized, security isolation, audit events).
 - `backend/tests/test_phase6a_document_upload.py`: Automated upload validation test suite (extension, MIME, magic bytes, 10 MB limit, 5 files per case, ownership isolation).
@@ -70,33 +72,29 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (64/64 Passing):**
+- **Automated Test Suite (77/77 Passing):**
+  - `test_phase6e_gemini_ocr_extraction.py` (13 tests) -> ALL PASSED
+    - `test_gemini_ocr_success_scanned_pdf_and_image` -> PASSED (HTTP 200, EXTRACTED status, AI_EXTRACTED source, modelReportedLegibility, DOC_AI_EXTRACTED success logged)
+    - `test_gemini_ocr_malformed_json_handled_gracefully` -> PASSED (FAILED status, readable error message, zero crash, DOC_AI_EXTRACTED failure logged)
+    - `test_gemini_ocr_api_error_retry_and_backoff_on_429_and_5xx` -> PASSED (retries with backoff on 429/5xx, recovers on transient error)
+    - `test_gemini_ocr_no_retry_on_400_or_auth_errors` -> PASSED (zero retries on 400 client error, marks FAILED)
+    - `test_gemini_ocr_missing_key_document_ends_failed` -> PASSED (backend starts cleanly, document ends FAILED with readable message)
+    - `test_gemini_ocr_invalid_key_document_ends_failed` -> PASSED (401 error caught cleanly, zero retries, ends FAILED)
+    - `test_gemini_ocr_timeout_handled_gracefully` -> PASSED (GEMINI_TIMEOUT_SECONDS enforced, ends FAILED, zero crash)
+    - `test_prompt_injection_stored_only_as_extracted_text` -> PASSED ('ignore previous instructions' stored strictly as passive text, zero state changes)
+    - `test_ocr_labels_each_page_source_and_preserves_pypdf_text` -> PASSED (Page 1 PDF_TEXT preserved verbatim, Page 2 AI_EXTRACTED updated)
+    - `test_gemini_ocr_run_at_most_once_guard` -> PASSED (duplicate concurrent triggers safely skipped)
+    - `test_gemini_receives_only_file_bytes_and_fixed_prompt` -> PASSED (zero patient ID, case ID, filename, or complaint sent; tools=[])
+    - `test_unauthorized_access_to_ocr_extracted_text` -> PASSED (HTTP 403 Forbidden on cross-patient, HTTP 401 on unauthenticated)
+    - `test_endpoint_trigger_document_ocr` -> PASSED (POST /cases/{caseId}/documents/{docId}/ocr triggers OCR for owner, 403 for others)
   - `test_phase6d_signed_url_access.py` (19 tests) -> ALL PASSED
-    - `test_owner_allowed_download_url` -> PASSED (HTTP 200, short-lived 300s, DOC_VIEWED logged, no token in audit logs)
-    - `test_other_patient_denied_download_url` -> PASSED (HTTP 403 Forbidden, DOC_VIEW_DENIED logged)
-    - `test_assigned_clinician_allowed_in_accepted_in_consultation_completed` -> PASSED (HTTP 200 in ACCEPTED, IN_CONSULTATION, COMPLETED)
-    - `test_assigned_clinician_denied_on_cancelled_case` -> PASSED (HTTP 403 Forbidden, DOC_VIEW_DENIED logged)
-    - `test_clinician_on_reassigned_case_denied` -> PASSED (HTTP 403 Forbidden when case reassigned)
-    - `test_unassigned_clinician_denied_download_url` -> PASSED (HTTP 403 Forbidden)
-    - `test_unverified_clinician_denied_download_url` -> PASSED (HTTP 403 Forbidden)
-    - `test_admin_allowed_download_url` -> PASSED (HTTP 200)
-    - `test_unauthenticated_request_denied` -> PASSED (HTTP 401 Unauthorized)
-    - `test_invalid_case_or_document_id_returns_404` -> PASSED (HTTP 404 Not Found)
-    - `test_stream_endpoint_pdf_headers` -> PASSED (X-Content-Type-Options: nosniff, Cache-Control: no-store, Content-Disposition: inline, Content-Type: application/pdf)
-    - `test_stream_endpoint_image_headers` -> PASSED (Content-Disposition: attachment for images, Content-Type: image/jpeg)
-    - `test_stream_token_swapped_to_different_document_rejected` -> PASSED (HTTP 403 Forbidden on swapped documentId)
-    - `test_stream_token_expired_rejected` -> PASSED (HTTP 403 Forbidden on past timestamp)
-    - `test_stream_token_never_logged` -> PASSED (tokens verified absent from both audit logs and application logs)
-    - `test_assigned_clinician_stream_access_denied_if_case_cancelled` -> PASSED (HTTP 403 Forbidden)
-    - `test_startup_bucket_creation_error_handling` -> PASSED (re-raises RuntimeError, logs clear error, never swallows)
-    - `test_startup_validates_stream_secret_outside_testing` -> PASSED (raises RuntimeError if DOC_STREAM_SECRET missing outside testing)
-    - `test_stream_access_log_filter_redacts_tokens` -> PASSED (uvicorn.access filter strips query parameters and HMAC tokens from log records)
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
   - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
-- **Phase 6d Verification Status:**
+- **Phase 6 Verification Status:**
+  - **Real-Gemini multimodal extraction**: **`UNVERIFIED`** *(awaiting manual user test run with real GEMINI_API_KEY)*.
   - **Stream endpoint on the real emulator**: **`UNVERIFIED`** *(awaiting manual user test run)*.
   - **Firestore persistence**: **VERIFIED** *(manual, emulator, 10 Oct 2026: case survived a backend restart)*.
   - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in emulator UI)*.
@@ -108,9 +106,10 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
 
 ## 5. Next Steps
-- User will manually run verification of the stream endpoint on the real emulator.
+- User will manually run verification of the Gemini OCR extraction with real `GEMINI_API_KEY` and stream endpoint on the real emulator.
 - Do NOT start servers.
-- Do NOT start Phase 6e.
+- Do NOT commit, amend, or tag.
+- Do NOT start Phase 7.
 
 ## 6. Known Issues & Tech Debt
 1. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.

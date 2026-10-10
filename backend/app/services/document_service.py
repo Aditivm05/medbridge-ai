@@ -30,9 +30,13 @@ from app.schemas.document import (
     DocumentTextResponse,
     ExtractionStatus,
     PageText,
+    ExtractedField,
+    ExtractedPage,
+    OcrStructuredExtraction,
 )
 from app.schemas.audit import AuditEventType
 from app.services.audit_service import audit_service
+from app.services.gemini_service import gemini_ocr_service
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +49,10 @@ class DocumentService:
     def __init__(self, db=None, storage=None):
         self._db = db
         self._storage = storage
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.timeout_seconds = EXTRACTION_TIMEOUT_SECONDS
+        self._ocr_active_docs: set[str] = set()
 
     @property
     def db(self):
@@ -243,6 +248,7 @@ class DocumentService:
                             text=cleaned_text,
                             charCount=char_count,
                             status=page_status,
+                            source="PDF_TEXT",
                         )
                     )
                 else:
@@ -253,6 +259,7 @@ class DocumentService:
                             text=cleaned_text,
                             charCount=char_count,
                             status=page_status,
+                            source="PDF_TEXT",
                         )
                     )
                     extracted_text_parts.append(f"--- [Page {page_num}] ---\n{cleaned_text}")
@@ -330,7 +337,7 @@ class DocumentService:
                 status = ExtractionStatus.FAILED
                 error_msg = f"Unexpected extraction error: {str(e)}"
         elif target_mime.startswith("image/"):
-            # Image files in Phase 6c have no text stream; mark NEEDS_OCR (Gemini OCR in 6e)
+            # Image files in Phase 6c/6e have no text stream; mark NEEDS_OCR
             status = ExtractionStatus.NEEDS_OCR
             page_count = 1
             pages = [
@@ -339,6 +346,7 @@ class DocumentService:
                     text="",
                     charCount=0,
                     status=ExtractionStatus.NEEDS_OCR,
+                    source="AI_EXTRACTED",
                 )
             ]
             error_msg = "Image document has no embedded text stream; scheduled for visual OCR."
@@ -347,9 +355,11 @@ class DocumentService:
             error_msg = f"Unsupported MIME type for text extraction: '{target_mime}'."
 
         now = datetime.utcnow()
+        extraction_source = "PDF_TEXT" if status == ExtractionStatus.EXTRACTED else None
         updated_doc = doc.model_copy(
             update={
                 "extractionStatus": status,
+                "extractionSource": extraction_source,
                 "pageCount": page_count,
                 "pages": pages,
                 "extractedText": full_text,
@@ -392,7 +402,223 @@ class DocumentService:
                 },
             )
 
+        # In Phase 6e: If document needs OCR and a Gemini client is available,
+        # automatically chain OCR in the background
+        if status == ExtractionStatus.NEEDS_OCR and gemini_ocr_service.get_client() is not None:
+            self._executor.submit(
+                self.process_gemini_ocr,
+                document_id=document_id,
+                file_bytes=file_bytes,
+                case_id=target_case_id,
+                actor_id=actor_id,
+                actor_role=actor_role,
+            )
+
         return updated_doc
+
+    def process_gemini_ocr(
+        self,
+        document_id: str,
+        file_bytes: Optional[bytes] = None,
+        case_id: Optional[str] = None,
+        actor_id: Optional[str] = None,
+        actor_role: Optional[str] = None,
+    ) -> DocumentResponse:
+        """
+        Executes Gemini multimodal OCR extraction for scanned PDFs and images.
+        Safety and privacy requirements:
+        1. Sends ONLY raw file bytes and fixed prompt to Gemini. Never sends filename, patient ID, case ID, or complaint.
+        2. Never logs Gemini response text or API key; logs only status and counts.
+        3. Gemini gets no tools; treats document content strictly as data.
+        4. Labels each page's source ('PDF_TEXT' or 'AI_EXTRACTED'). Never overwrites original pypdf text.
+        5. modelReportedLegibility recorded for fields (not an accuracy score).
+        6. Timeout from GEMINI_TIMEOUT_SECONDS, retries with backoff ONLY on 429 and 5xx.
+        7. Missing or invalid key leaves backend running, marks document FAILED with readable message.
+        8. Guards against duplicate or concurrent triggers (runs at most once per document).
+        9. Records DOC_AI_EXTRACTED audit event on success and failure.
+        """
+        with self._lock:
+            if document_id in self._ocr_active_docs:
+                logger.info("OCR already in progress for document %s, skipping duplicate trigger.", document_id)
+                doc = self.get_document(document_id, case_id=case_id)
+                return doc
+
+            doc = self.get_document(document_id, case_id=case_id)
+            if not doc:
+                raise ValueError(f"Document '{document_id}' not found.")
+
+            if doc.ocrStatus in ("processing", "completed") and doc.extractionStatus == ExtractionStatus.EXTRACTED:
+                logger.info("OCR already completed for document %s, skipping duplicate trigger.", document_id)
+                return doc
+
+            self._ocr_active_docs.add(document_id)
+
+        target_case_id = case_id or doc.caseId
+
+        try:
+            # 1. Transition status in Firestore to PROCESSING
+            processing_doc = doc.model_copy(
+                update={
+                    "extractionStatus": ExtractionStatus.PROCESSING,
+                    "ocrStatus": "processing",
+                }
+            )
+            with self._lock:
+                doc_dict = document_to_firestore_dict(processing_doc)
+                self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(doc_dict)
+                self.db.collection("documents").document(document_id).set(doc_dict)
+
+            # 2. Retrieve file bytes if not supplied
+            if file_bytes is None:
+                try:
+                    bucket = self.storage.bucket(settings.STORAGE_BUCKET_NAME)
+                    blob = bucket.blob(doc.storagePath)
+                    file_bytes = blob.download_as_bytes()
+                except Exception as e:
+                    logger.error(f"Could not download blob '{doc.storagePath}' for OCR: {e}")
+                    file_bytes = b""
+
+            if not file_bytes:
+                fail_msg = "No file bytes available for OCR extraction."
+                now = datetime.utcnow()
+                failed_doc = doc.model_copy(
+                    update={
+                        "extractionStatus": ExtractionStatus.FAILED,
+                        "ocrStatus": "failed",
+                        "errorMessage": fail_msg,
+                        "extractedAt": now,
+                    }
+                )
+                with self._lock:
+                    self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+                    self.db.collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+
+                audit_service.log_event(
+                    event_type=AuditEventType.DOC_AI_EXTRACTED,
+                    actor_id=actor_id or "system",
+                    actor_role=actor_role or "system",
+                    case_id=target_case_id,
+                    details={
+                        "documentId": document_id,
+                        "status": "failed",
+                        "reason": fail_msg,
+                        "extractionSource": "AI_EXTRACTED",
+                    },
+                )
+                return failed_doc
+
+            # 3. Call Gemini OCR with file bytes and fixed prompt only
+            success, extraction, error_msg = gemini_ocr_service.extract_document_ocr(
+                file_bytes=file_bytes,
+                mime_type=doc.mimeType,
+            )
+
+            now = datetime.utcnow()
+
+            if not success or extraction is None:
+                failed_doc = doc.model_copy(
+                    update={
+                        "extractionStatus": ExtractionStatus.FAILED,
+                        "ocrStatus": "failed",
+                        "errorMessage": error_msg or "Gemini OCR extraction failed.",
+                        "extractedAt": now,
+                    }
+                )
+                with self._lock:
+                    self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+                    self.db.collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+
+                audit_service.log_event(
+                    event_type=AuditEventType.DOC_AI_EXTRACTED,
+                    actor_id=actor_id or "system",
+                    actor_role=actor_role or "system",
+                    case_id=target_case_id,
+                    details={
+                        "documentId": document_id,
+                        "status": "failed",
+                        "reason": error_msg or "Gemini OCR extraction failed.",
+                        "extractionSource": "AI_EXTRACTED",
+                    },
+                )
+                return failed_doc
+
+            # 4. Merge pages: preserve original pypdf text for pages that had text!
+            existing_pages = doc.pages or []
+            updated_pages: List[PageText] = []
+            ocr_pages_map = {p.pageNumber: p.text for p in extraction.pages}
+
+            if existing_pages:
+                for ep in existing_pages:
+                    # If page had valid text from pypdf and was not NEEDS_OCR: keep it!
+                    if ep.status == ExtractionStatus.EXTRACTED and ep.source == "PDF_TEXT" and ep.charCount > 0:
+                        updated_pages.append(ep)
+                    else:
+                        ai_text = ocr_pages_map.get(ep.pageNumber, "")
+                        updated_pages.append(
+                            PageText(
+                                pageNumber=ep.pageNumber,
+                                text=ai_text,
+                                charCount=len(ai_text),
+                                status=ExtractionStatus.EXTRACTED,
+                                source="AI_EXTRACTED",
+                            )
+                        )
+            else:
+                for ocr_p in extraction.pages:
+                    updated_pages.append(
+                        PageText(
+                            pageNumber=ocr_p.pageNumber,
+                            text=ocr_p.text,
+                            charCount=len(ocr_p.text),
+                            status=ExtractionStatus.EXTRACTED,
+                            source="AI_EXTRACTED",
+                        )
+                    )
+
+            full_text_parts = [
+                f"--- [Page {p.pageNumber}] ({p.source}) ---\n{p.text}"
+                for p in updated_pages
+                if p.text
+            ]
+            full_text = "\n\n".join(full_text_parts) if full_text_parts else None
+
+            completed_doc = doc.model_copy(
+                update={
+                    "extractionStatus": ExtractionStatus.EXTRACTED,
+                    "ocrStatus": "completed",
+                    "extractionSource": "AI_EXTRACTED",
+                    "requiresHumanReview": True,
+                    "pages": updated_pages,
+                    "pageCount": len(updated_pages),
+                    "extractedFields": extraction.fields,
+                    "extractedText": full_text,
+                    "errorMessage": None,
+                    "extractedAt": now,
+                }
+            )
+
+            with self._lock:
+                self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(document_to_firestore_dict(completed_doc))
+                self.db.collection("documents").document(document_id).set(document_to_firestore_dict(completed_doc))
+
+            audit_service.log_event(
+                event_type=AuditEventType.DOC_AI_EXTRACTED,
+                actor_id=actor_id or "system",
+                actor_role=actor_role or "system",
+                case_id=target_case_id,
+                details={
+                    "documentId": document_id,
+                    "status": "success",
+                    "pageCount": len(updated_pages),
+                    "fieldsCount": len(extraction.fields),
+                    "extractionSource": "AI_EXTRACTED",
+                },
+            )
+            return completed_doc
+
+        finally:
+            with self._lock:
+                self._ocr_active_docs.discard(document_id)
 
 
 document_service = DocumentService()

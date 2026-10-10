@@ -40,6 +40,29 @@ class PageText(BaseModel):
     text: str
     charCount: int
     status: ExtractionStatus = ExtractionStatus.EXTRACTED
+    source: str = "PDF_TEXT"  # "PDF_TEXT" or "AI_EXTRACTED"
+
+
+class ExtractedField(BaseModel):
+    fieldName: str = Field(..., description="Name or label of the extracted observation/test/finding")
+    value: str = Field(..., description="Extracted value exactly as visible on the document")
+    unit: Optional[str] = Field(default=None, description="Exact unit of measurement if present, e.g. mg/dL, mm Hg")
+    pageNumber: int = Field(default=1, description="1-indexed page number where the field was found")
+    modelReportedLegibility: Optional[str] = Field(
+        default="high",
+        description="Model-reported legibility of visible text ('high', 'medium', 'unreadable'). Note: this is a legibility indicator, NOT an accuracy or diagnostic score.",
+    )
+
+
+class ExtractedPage(BaseModel):
+    pageNumber: int = Field(..., description="1-indexed page number")
+    text: str = Field(..., description="Verbatim transcribed text visible on this page")
+
+
+class OcrStructuredExtraction(BaseModel):
+    pages: list[ExtractedPage] = Field(default_factory=list, description="Transcribed text per page")
+    fields: list[ExtractedField] = Field(default_factory=list, description="Key clinical facts/values visible")
+    unreadableNotes: Optional[str] = Field(default=None, description="Notes on any blur, cut off, or illegible sections")
 
 
 class DocumentUploadIntentRequest(BaseModel):
@@ -66,8 +89,11 @@ class DocumentResponse(BaseModel):
     sizeBytes: int
     magicBytesValidated: bool = True
     extractionStatus: ExtractionStatus = ExtractionStatus.PENDING
+    extractionSource: Optional[str] = None  # "PDF_TEXT", "AI_EXTRACTED"
+    requiresHumanReview: bool = True
     pageCount: Optional[int] = None
     pages: list[PageText] = Field(default_factory=list)
+    extractedFields: list[ExtractedField] = Field(default_factory=list)
     extractedText: Optional[str] = None
     ocrStatus: str = "pending"
     errorMessage: Optional[str] = None
@@ -81,8 +107,11 @@ class DocumentTextResponse(BaseModel):
     documentId: str
     caseId: str
     extractionStatus: ExtractionStatus
+    extractionSource: Optional[str] = None
+    requiresHumanReview: bool = True
     pageCount: Optional[int] = None
     pages: list[PageText] = Field(default_factory=list)
+    extractedFields: list[ExtractedField] = Field(default_factory=list)
     fullText: Optional[str] = None
     errorMessage: Optional[str] = None
     extractedAt: Optional[datetime] = None

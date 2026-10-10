@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     
     # Gemini AI configuration
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_TIMEOUT_SECONDS: int = 60
     
     # Firebase / Google Cloud configuration
     FIREBASE_PROJECT_ID: str = "demo-medbridge"
