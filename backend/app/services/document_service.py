@@ -1,4 +1,8 @@
 import io
+import os
+import hmac
+import hashlib
+import time
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -7,8 +11,20 @@ from typing import Dict, List, Optional, Tuple, Any
 import pypdf
 
 from app.core.config import settings
-from app.core.firestore_client import get_firestore_client, get_storage_client
+from app.core.firestore_client import get_firestore_client, get_storage_client, is_testing_environment
 from app.models.firestore_models import document_to_firestore_dict, document_from_firestore_dict
+
+logger = logging.getLogger(__name__)
+
+
+def get_stream_signing_secret() -> str:
+    secret = os.environ.get("DOC_STREAM_SECRET") or settings.DOC_STREAM_SECRET
+    if secret and secret.strip():
+        return secret.strip()
+    if is_testing_environment():
+        return "test-in-memory-stream-signing-secret-key-32-chars"
+    raise RuntimeError("DOC_STREAM_SECRET environment variable is required outside testing environments.")
+
 from app.schemas.document import (
     DocumentResponse,
     DocumentTextResponse,
@@ -115,6 +131,43 @@ class DocumentService:
         with self._lock:
             snaps = self.db.collection("documents").stream()
             return [document_from_firestore_dict(s.id, s.to_dict()) for s in snaps]
+
+    def get_document_bytes(self, doc: DocumentResponse) -> bytes:
+        """Downloads raw bytes of a document from the Storage bucket."""
+        with self._lock:
+            bucket = self.storage.bucket(settings.STORAGE_BUCKET_NAME)
+            blob = bucket.blob(doc.storagePath)
+            return blob.download_as_bytes()
+
+    def generate_stream_token(self, case_id: str, document_id: str, user_id: str, expiry: int) -> str:
+        """Binds caseId + documentId + userId + expiry using HMAC-SHA256."""
+        secret = get_stream_signing_secret()
+        payload = f"{case_id}:{document_id}:{user_id}:{expiry}".encode("utf-8")
+        return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+    def verify_stream_token(self, case_id: str, document_id: str, user_id: str, expiry: int, token: str) -> bool:
+        """Validates stream token using constant-time comparison and expiry check."""
+        if not token or not token.strip():
+            return False
+        if int(time.time()) > expiry:
+            return False
+        secret = get_stream_signing_secret()
+        payload = f"{case_id}:{document_id}:{user_id}:{expiry}".encode("utf-8")
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, token.strip())
+
+    def generate_download_url(self, doc: DocumentResponse, user_id: str, base_url: str = "") -> Tuple[str, bool, int]:
+        """
+        Generates a download URL for an authorized viewer.
+        - Emulator / dev / test mode: short-lived HMAC streaming endpoint.
+        - Never logs or leaks the token.
+        - Expiration: 300 seconds (5 minutes).
+        """
+        expires_in = 300
+        expiry = int(time.time()) + expires_in
+        token = self.generate_stream_token(doc.caseId, doc.documentId, user_id, expiry)
+        url = f"{base_url}/api/v1/cases/{doc.caseId}/documents/{doc.documentId}/stream?token={token}&expires={expiry}&userId={user_id}"
+        return (url, True, expires_in)
 
     def extract_pdf_pages(
         self,

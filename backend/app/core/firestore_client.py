@@ -56,6 +56,15 @@ class FakeBucket:
             self._blobs[blob_name] = FakeBlob(blob_name, self)
         return self._blobs[blob_name]
 
+    def get_blob(self, blob_name: str) -> Optional[FakeBlob]:
+        return self._blobs.get(blob_name)
+
+    def exists(self) -> bool:
+        return True
+
+    def create(self):
+        pass
+
 
 class FakeStorageClient:
     def __init__(self):
@@ -65,6 +74,43 @@ class FakeStorageClient:
         if name not in self._buckets:
             self._buckets[name] = FakeBucket(name)
         return self._buckets[name]
+
+    def get_bucket(self, name: str) -> Optional[FakeBucket]:
+        return self._buckets.get(name)
+
+    def create_bucket(self, name: str) -> FakeBucket:
+        b = FakeBucket(name)
+        self._buckets[name] = b
+        return b
+
+
+def ensure_emulator_storage_bucket():
+    """
+    Ensures the storage bucket exists on startup only when the emulator host is set.
+    Logs a clear error and re-raises if it fails; never swallows errors.
+    """
+    storage_host = os.environ.get("STORAGE_EMULATOR_HOST", settings.FIREBASE_STORAGE_EMULATOR_HOST)
+    if not storage_host:
+        return
+
+    bucket_name = settings.STORAGE_BUCKET_NAME
+    try:
+        client = get_storage_client()
+        if is_testing_environment():
+            b = client.bucket(bucket_name)
+            if hasattr(b, "create"):
+                b.create()
+            return
+
+        # Real Storage emulator: check/initialize bucket by writing an init marker
+        b = client.bucket(bucket_name)
+        init_blob = b.blob(".init_bucket_check")
+        init_blob.upload_from_string(b"bucket_initialized", content_type="text/plain")
+        init_blob.delete()
+        logger.info(f"Verified / created emulator storage bucket '{bucket_name}' at {storage_host}")
+    except Exception as e:
+        logger.error(f"Failed to create storage bucket '{bucket_name}' on emulator host '{storage_host}': {e}")
+        raise RuntimeError(f"Storage bucket initialization failed on emulator '{storage_host}': {e}") from e
 
 
 class FakeDocumentSnapshot:

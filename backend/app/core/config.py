@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     FIREBASE_STORAGE_EMULATOR_HOST: Optional[str] = "127.0.0.1:9199"
     STORAGE_BUCKET_NAME: str = "medbridge-ai-documents"
     
+    # Document Streaming / Download Token Signing Secret
+    DOC_STREAM_SECRET: Optional[str] = None
+    
     # CORS
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:5173",

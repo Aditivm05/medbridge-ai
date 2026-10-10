@@ -41,5 +41,8 @@ class AuditService:
     def list_recent_events(self, limit: int = 50) -> List[AuditEventResponse]:
         return sorted(self._events, key=lambda e: e.timestamp, reverse=True)[:limit]
 
+    def list_events(self) -> List[AuditEventResponse]:
+        return list(self._events)
+
 
 audit_service = AuditService()

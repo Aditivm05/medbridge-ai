@@ -1,13 +1,15 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, BackgroundTasks, status
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, BackgroundTasks, status, Response, Request
 from typing import Optional, List
 from datetime import datetime
 import uuid
 import os
+import logging
 from app.schemas.document import (
     DocumentUploadIntentRequest,
     DocumentUploadIntentResponse,
     DocumentResponse,
     DocumentTextResponse,
+    DocumentDownloadUrlResponse,
     ExtractionStatus,
     ALLOWED_MIME_TYPES,
     MAX_FILE_SIZE_BYTES,
@@ -15,10 +17,13 @@ from app.schemas.document import (
     validate_magic_bytes,
 )
 from app.schemas.audit import AuditEventType
+from app.core.state_machine import CaseStatus
 from app.services.audit_service import audit_service
 from app.services.case_service import case_service, CaseNotFoundError
 from app.services.document_service import document_service
 from app.core.auth import get_current_user, check_case_ownership, AuthenticatedUser
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cases/{case_id}/documents", tags=["documents"])
 
@@ -364,5 +369,238 @@ def trigger_document_extraction(
         actor_id=current_user.uid,
         actor_role=current_user.role,
     )
+
+
+@router.get("/{document_id}/download-url", response_model=DocumentDownloadUrlResponse)
+def get_document_download_url(
+    case_id: str,
+    document_id: str,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Returns a short-lived download URL (5 minutes) after strict RBAC authorization:
+    - Allowed:
+      * Case patient owner (user.role == 'patient' and user.uid == case.patientId)
+      * Verified assigned clinician when case status in {ACCEPTED, IN_CONSULTATION, COMPLETED}
+      * Admin (user.role == 'admin')
+    - Denied (HTTP 403 Forbidden with DOC_VIEW_DENIED audit log):
+      * Other patients
+      * Unassigned clinicians
+      * Unverified clinicians
+      * Assigned clinician on cases in any other status (e.g. CANCELLED, DRAFT, SUBMITTED, MATCHING, REASSIGNED)
+    - Not Found (HTTP 404):
+      * Case does not exist
+      * Document does not exist or does not belong to case
+    - Tokens are NEVER logged.
+    """
+    try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    doc = document_service.get_document(document_id, case_id=case_id)
+    if not doc or doc.caseId != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found for case '{case_id}'.",
+        )
+
+    # Deliberate 403 vs 404 decision: resource exists, now enforce RBAC authorization
+    is_authorized = False
+    denial_reason = ""
+
+    if current_user.role == "admin":
+        is_authorized = True
+    elif current_user.role == "patient":
+        if current_user.uid == case.patientId:
+            is_authorized = True
+        else:
+            denial_reason = "Patients can only access documents from their own cases."
+    elif current_user.role == "clinician":
+        if not current_user.is_verified_clinician:
+            denial_reason = "Only verified clinicians may access clinical documents."
+        elif case.assignedClinicianId != current_user.uid:
+            denial_reason = "Clinician is not assigned to this case."
+        elif case.status not in {CaseStatus.ACCEPTED, CaseStatus.IN_CONSULTATION, CaseStatus.COMPLETED}:
+            denial_reason = f"Clinician document access not permitted when case status is '{case.status}' (requires ACCEPTED, IN_CONSULTATION, or COMPLETED)."
+        else:
+            is_authorized = True
+    else:
+        denial_reason = f"Role '{current_user.role}' is not authorized to access documents."
+
+    if not is_authorized:
+        audit_service.log_event(
+            event_type=AuditEventType.DOC_VIEW_DENIED,
+            actor_id=current_user.uid,
+            actor_role=current_user.role,
+            case_id=case_id,
+            details={
+                "documentId": document_id,
+                "reason": denial_reason,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: {denial_reason}",
+        )
+
+    # Success: generate short-lived download URL (5 minutes)
+    download_url, is_fallback, expires_in = document_service.generate_download_url(
+        doc, user_id=current_user.uid
+    )
+
+    # Write DOC_VIEWED audit event (never log tokens or token-containing URLs)
+    audit_service.log_event(
+        event_type=AuditEventType.DOC_VIEWED,
+        actor_id=current_user.uid,
+        actor_role=current_user.role,
+        case_id=case_id,
+        details={
+            "documentId": document_id,
+            "fileName": doc.fileName,
+            "mimeType": doc.mimeType,
+            "isEmulatorFallback": is_fallback,
+        },
+    )
+
+    return DocumentDownloadUrlResponse(
+        documentId=doc.documentId,
+        caseId=case_id,
+        fileName=doc.fileName,
+        downloadUrl=download_url,
+        expiresInSeconds=expires_in,
+        isEmulatorFallback=is_fallback,
+    )
+
+
+@router.get("/{document_id}/stream")
+def stream_document_content(
+    case_id: str,
+    document_id: str,
+    token: str,
+    expires: int,
+    userId: str,
+):
+    """
+    Streams file bytes with signed token validation:
+    - Binds caseId + documentId + userId + expiry using HMAC-SHA256
+    - Uses constant-time hmac.compare_digest
+    - Rejects expired or swapped tokens (HTTP 403)
+    - If user is assigned clinician, enforces case status in {ACCEPTED, IN_CONSULTATION, COMPLETED}
+    - Headers:
+        X-Content-Type-Options: nosniff
+        Cache-Control: no-store
+        Content-Disposition: inline (for PDF) or attachment (for images)
+    - Tokens are NEVER logged.
+    """
+    try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    doc = document_service.get_document(document_id, case_id=case_id)
+    if not doc or doc.caseId != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found for case '{case_id}'.",
+        )
+
+    # 1. Verify stream token (binds caseId + documentId + userId + expiry)
+    is_valid = document_service.verify_stream_token(
+        case_id=case_id,
+        document_id=document_id,
+        user_id=userId,
+        expiry=expires,
+        token=token,
+    )
+    if not is_valid:
+        audit_service.log_event(
+            event_type=AuditEventType.DOC_VIEW_DENIED,
+            actor_id=userId,
+            actor_role="stream_bearer",
+            case_id=case_id,
+            details={
+                "documentId": document_id,
+                "reason": "Invalid, expired, or swapped stream token",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Invalid or expired download token.",
+        )
+
+    # 2. Clinician status guard: if userId is assigned clinician, ensure status is still permitted
+    if userId == case.assignedClinicianId:
+        if case.status not in {CaseStatus.ACCEPTED, CaseStatus.IN_CONSULTATION, CaseStatus.COMPLETED}:
+            audit_service.log_event(
+                event_type=AuditEventType.DOC_VIEW_DENIED,
+                actor_id=userId,
+                actor_role="clinician",
+                case_id=case_id,
+                details={
+                    "documentId": document_id,
+                    "reason": f"Case status '{case.status}' does not permit clinician document access.",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Forbidden: Case status '{case.status}' does not permit clinician document access.",
+            )
+
+    # 3. Retrieve document bytes from storage
+    try:
+        file_bytes = document_service.get_document_bytes(doc)
+    except Exception as e:
+        logger.error(f"Failed to retrieve document bytes for '{document_id}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not retrieve document content from storage.",
+        )
+
+    # 4. Content-Disposition: sanitize filename
+    raw_filename = os.path.basename(doc.fileName or f"document_{doc.documentId}")
+    safe_filename = "".join(c for c in raw_filename if c.isalnum() or c in "._- ")
+    if not safe_filename.strip():
+        safe_filename = f"document_{doc.documentId}"
+
+    # Use inline only for PDFs, attachment for images
+    if doc.mimeType == "application/pdf":
+        disposition_type = "inline"
+    else:
+        disposition_type = "attachment"
+
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+        "Content-Disposition": f'{disposition_type}; filename="{safe_filename}"',
+    }
+
+    # Log view audit event on stream access (NEVER log the token)
+    audit_service.log_event(
+        event_type=AuditEventType.DOC_VIEWED,
+        actor_id=userId,
+        actor_role="stream_bearer",
+        case_id=case_id,
+        details={
+            "documentId": document_id,
+            "fileName": doc.fileName,
+            "mimeType": doc.mimeType,
+            "action": "streamed",
+        },
+    )
+
+    return Response(
+        content=file_bytes,
+        media_type=doc.mimeType,
+        headers=headers,
+    )
+
 
 

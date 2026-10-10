@@ -9,7 +9,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
 - [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix Firestore persistence & Storage uploads Verified (manual, emulator, 10 Oct 2026); Firestore transactions UNVERIFIED until Phase 8)*
+- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix Firestore persistence & Storage uploads Verified (manual, emulator, 10 Oct 2026); Phase 6d Signed-URL & Stream Access Implemented (18/18 pytest passing); Stream endpoint on real emulator marked UNVERIFIED until manual run; Firestore transactions UNVERIFIED until Phase 8)*
 - [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
 
 ## 3. Files Created Across Phases 1 - 5
@@ -36,6 +36,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/services/document_service.py`: Extraction service per-page (`pypdf`), low-text `NEEDS_OCR` tagging, encrypted/corrupted/page-limit safeguards (30 pages max), audit events.
 - `backend/app/services/audit_service.py`: Append-only audit logger.
 - `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, text retrieval), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/tests/test_phase6d_signed_url_access.py`: Automated signed URL & streaming access test suite (RBAC owner/clinician/admin, 403 status gates, token swap & expiry rejection, header security, zero-token audit logging).
 - `backend/tests/test_phase6c_pdf_text_extraction.py`: Automated PDF text extraction test suite (single-page, multi-page, empty/scanned, corrupted, encrypted, oversized, security isolation, audit events).
 - `backend/tests/test_phase6a_document_upload.py`: Automated upload validation test suite (extension, MIME, magic bytes, 10 MB limit, 5 files per case, ownership isolation).
 - `backend/tests/test_phase5_state_machine_and_crud.py`: Exhaustive 100-pair state transition matrix test (18 valid, 82 invalid), CRUD lifecycle, idempotency, and Firestore models.
@@ -69,58 +70,51 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (45/45 Passing):**
+- **Automated Test Suite (64/64 Passing):**
+  - `test_phase6d_signed_url_access.py` (19 tests) -> ALL PASSED
+    - `test_owner_allowed_download_url` -> PASSED (HTTP 200, short-lived 300s, DOC_VIEWED logged, no token in audit logs)
+    - `test_other_patient_denied_download_url` -> PASSED (HTTP 403 Forbidden, DOC_VIEW_DENIED logged)
+    - `test_assigned_clinician_allowed_in_accepted_in_consultation_completed` -> PASSED (HTTP 200 in ACCEPTED, IN_CONSULTATION, COMPLETED)
+    - `test_assigned_clinician_denied_on_cancelled_case` -> PASSED (HTTP 403 Forbidden, DOC_VIEW_DENIED logged)
+    - `test_clinician_on_reassigned_case_denied` -> PASSED (HTTP 403 Forbidden when case reassigned)
+    - `test_unassigned_clinician_denied_download_url` -> PASSED (HTTP 403 Forbidden)
+    - `test_unverified_clinician_denied_download_url` -> PASSED (HTTP 403 Forbidden)
+    - `test_admin_allowed_download_url` -> PASSED (HTTP 200)
+    - `test_unauthenticated_request_denied` -> PASSED (HTTP 401 Unauthorized)
+    - `test_invalid_case_or_document_id_returns_404` -> PASSED (HTTP 404 Not Found)
+    - `test_stream_endpoint_pdf_headers` -> PASSED (X-Content-Type-Options: nosniff, Cache-Control: no-store, Content-Disposition: inline, Content-Type: application/pdf)
+    - `test_stream_endpoint_image_headers` -> PASSED (Content-Disposition: attachment for images, Content-Type: image/jpeg)
+    - `test_stream_token_swapped_to_different_document_rejected` -> PASSED (HTTP 403 Forbidden on swapped documentId)
+    - `test_stream_token_expired_rejected` -> PASSED (HTTP 403 Forbidden on past timestamp)
+    - `test_stream_token_never_logged` -> PASSED (tokens verified absent from both audit logs and application logs)
+    - `test_assigned_clinician_stream_access_denied_if_case_cancelled` -> PASSED (HTTP 403 Forbidden)
+    - `test_startup_bucket_creation_error_handling` -> PASSED (re-raises RuntimeError, logs clear error, never swallows)
+    - `test_startup_validates_stream_secret_outside_testing` -> PASSED (raises RuntimeError if DOC_STREAM_SECRET missing outside testing)
+    - `test_stream_access_log_filter_redacts_tokens` -> PASSED (uvicorn.access filter strips query parameters and HMAC tokens from log records)
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
-    - `test_extract_single_page_pdf_text` -> PASSED (single page text with citation)
-    - `test_extract_multipage_pdf_per_page_text` -> PASSED (per-page dictionary citations)
-    - `test_extract_empty_or_scanned_pdf_marked_needs_ocr` -> PASSED (NEEDS_OCR without content guessing)
-    - `test_corrupted_pdf_handled_gracefully` -> PASSED (FAILED status, no server crash)
-    - `test_encrypted_pdf_handled_gracefully` -> PASSED (readable error, no server crash)
-    - `test_oversized_page_count_handled_gracefully` -> PASSED (30-page limit enforced, no crash)
-    - `test_unauthorized_access_to_extracted_text_rejected` -> PASSED (HTTP 403 ownership isolation)
-    - `test_audit_events_for_extraction` -> PASSED (DOC_TEXT_EXTRACTED & DOC_EXTRACTION_FAILED audit logs)
-    - `test_image_upload_marked_needs_ocr_without_gemini` -> PASSED (NEEDS_OCR, 0 Gemini calls)
-    - `test_extraction_timeout_handled_gracefully` -> PASSED (simulated hang -> FAILED + readable error + audit event)
-    - `test_backend_restart_persistence_check` -> PASSED (case, doc, text, and idempotency survive backend restart)
   - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
-    - `test_valid_pdf_upload_succeeds` -> PASSED
-    - `test_valid_jpeg_and_png_uploads_succeed` -> PASSED
-    - `test_invalid_extension_rejected` -> PASSED (HTTP 400)
-    - `test_mismatched_extension_and_mime_rejected` -> PASSED (HTTP 400)
-    - `test_unsupported_mime_type_rejected` -> PASSED (HTTP 400)
-    - `test_magic_byte_spoofing_rejected` -> PASSED (HTTP 400 + audit rejection log)
-    - `test_empty_file_rejected` -> PASSED (HTTP 400)
-    - `test_10mb_limit_exceeded_rejected` -> PASSED (HTTP 400)
-    - `test_max_5_documents_per_case_limit_enforced` -> PASSED (HTTP 400 on 6th file & intent)
-    - `test_upload_intent_validations` -> PASSED (intent validation matrix)
-    - `test_document_ownership_isolation` -> PASSED (HTTP 403 Forbidden)
-    - `test_unauthenticated_upload_rejected` -> PASSED (HTTP 401 Unauthorized)
-    - `test_nonexistent_case_upload_rejected` -> PASSED (HTTP 404 Not Found)
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
-- **Phase 6c-Fix: Firestore Persistence & Storage Uploads:**
+- **Phase 6d Verification Status:**
+  - **Stream endpoint on the real emulator**: **`UNVERIFIED`** *(awaiting manual user test run)*.
   - **Firestore persistence**: **VERIFIED** *(manual, emulator, 10 Oct 2026: case survived a backend restart)*.
-  - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in the emulator UI)*.
+  - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in emulator UI)*.
   - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
-  - Migrated `CaseService` and `DocumentService` to direct Firestore persistence (`cases`, `cases/{caseId}/documents`, `idempotency_keys`).
-  - Idempotency keys now persist in Firestore, guaranteeing duplicate prevention survives backend restarts.
-  - Converted case acceptance to real Firestore transactions (`@firestore_transactional`) with race condition detection and HTTP 409 conflict.
-  - Uploaded files stream directly to the Storage emulator bucket (`medbridge-ai-documents`) with zero local disk copies. Added `data/` and `emulator-data/` to `.gitignore`.
-  - Added fail-fast emulator connection checks in production mode (raises `FirestoreConnectionError` if emulator unreachable, no silent fallbacks).
-  - Test suite operates against a dedicated `FakeFirestoreClient` and `FakeStorageClient` for fast, offline, serverless execution (45/45 tests passing).
+  - **Phase 12 IAM signBlob production signing**: **`UNTESTED`** *(documented in ARCHITECTURE.md for production Cloud Run deployment)*.
 - **Phase 6b Frontend Upload UI:**
   - `DocumentUploadScreen.tsx` updated with drag & drop file picker, client checks (PDF/JPG/PNG, max 10 MB, max 5 files), `XMLHttpRequest` real progress tracking, in-memory queue, status badges (`Selected`, `Uploading`, `Confirmed by server`, `Failed`), per-file retry mechanism, and error mapping.
   - `api.uploadDocument` implemented in `frontend/src/services/api.ts` with `xhr.upload.onprogress`.
 - **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
 
 ## 5. Next Steps
-- Await user approval before starting **Phase 6d** (signed-URL access with owner / assigned clinician / admin checks, `DOC_VIEWED` and denial audit events, emulator fallback, and tests for allowed/denied cases).
-- Do NOT start Phase 6d yet.
+- User will manually run verification of the stream endpoint on the real emulator.
+- Do NOT start servers.
 - Do NOT start Phase 6e.
 
 ## 6. Known Issues & Tech Debt
 1. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
 2. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
-3. **The `medbridge-ai-documents` bucket must be created in app startup, not manually**: Storage bucket auto-creation / check must be handled programmatically during backend startup lifecycle instead of relying on manual creation or predefined emulator setup.
+3. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
+
 

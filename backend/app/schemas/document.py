@@ -87,3 +87,12 @@ class DocumentTextResponse(BaseModel):
     errorMessage: Optional[str] = None
     extractedAt: Optional[datetime] = None
 
+
+class DocumentDownloadUrlResponse(BaseModel):
+    documentId: str
+    caseId: str
+    fileName: str
+    downloadUrl: str
+    expiresInSeconds: int = 300
+    isEmulatorFallback: bool = False
+

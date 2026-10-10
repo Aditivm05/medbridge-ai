@@ -286,3 +286,38 @@ VITE_FIREBASE_STORAGE_BUCKET=demo-medbridge.appspot.com
 5. **Concurrency Collision Test:** Two simultaneous POST requests to `/cases/{id}/accept` result in exactly one HTTP 200 response and one HTTP 409 Conflict response.
 6. **Signed URL Authorization Test:** Requesting a document download signed URL as an unauthenticated or unrelated user returns HTTP 403 Forbidden.
 7. **Simulation Stamping Test:** 100% of demo doctor cards, consultation notes, and availability indicators render the `[DEMO / SIMULATED]` badge.
+
+---
+
+## 9. Document Access Security & Storage Architecture
+
+### 9.1 Deliberate 403 vs 404 HTTP Status Code Decision
+When an authenticated user requests document metadata, download URLs, or streaming access:
+- **HTTP 404 Not Found**: Returned strictly when the requested `caseId` or `documentId` does not exist in Firestore.
+- **HTTP 403 Forbidden**: Returned deliberately when the resource exists, but the caller fails Role-Based Access Control (RBAC) authorization checks:
+  1. Patient requesting documents of a case that does not belong to their `patientId`.
+  2. Unassigned clinician attempting to access an active or completed case.
+  3. Unverified clinician (license unvalidated) attempting access.
+  4. Assigned clinician attempting access when the case is in `CANCELLED`, `DRAFT`, `SUBMITTED`, `MATCHING`, or reassigned states (only `ACCEPTED`, `IN_CONSULTATION`, and `COMPLETED` permitted).
+
+**Rationale**:
+In a clinical care navigation platform, masking non-ownership with 404 causes critical clinical friction and diagnostics confusion (e.g. clinicians believing lab results disappeared from the system). Returning **403 Forbidden** provides unambiguous authorization feedback, adheres to healthcare audit compliance requirements by triggering immediate `DOC_VIEW_DENIED` immutable audit log entries, and permits proactive detection of privilege escalation attempts without leaking confidential document binaries.
+
+### 9.2 Development & Local Emulator Streaming Fallback
+Firebase Storage Local Emulators lack GCP private keys and the IAM Credentials API, preventing standard `generate_signed_url(version="v4")` execution.
+- **Development / Emulator Architecture**: The backend provides a short-lived (5-minute / 300s) HMAC-SHA256 streaming fallback endpoint (`GET /api/v1/cases/{caseId}/documents/{docId}/stream?token=...&expires=...&userId=...`).
+- **Cryptographic Binding**: The token binds `caseId + documentId + userId + expiry` using a secret from the environment (`DOC_STREAM_SECRET`, required at startup outside `TESTING`).
+- **Verification**: Evaluated with `hmac.compare_digest` in constant time. Swapped document IDs and expired timestamps are rejected with HTTP 403.
+- **Stream Headers**:
+  - `X-Content-Type-Options: nosniff` (prevents MIME sniffing).
+  - `Cache-Control: no-store` (prevents intermediate and browser caching of PHI).
+  - `Content-Disposition`: Sanitized filename, rendered `inline` for PDFs (`application/pdf`) and `attachment` for images (`image/jpeg`, `image/png`).
+- **Security Guardrail**: Stream tokens and URLs containing tokens are **strictly never logged** in application logs or audit event details.
+
+### 9.3 Phase 12 Production Cloud Storage Signing Architecture [UNTESTED]
+In production Cloud Run environments, service-account key files (`.json`) are **strictly prohibited** to prevent credential leakage.
+- **Service Account Identity**: The Cloud Run backend runs under the compute service account `medbridge-backend@<project-id>.iam.gserviceaccount.com` assigned `roles/iam.serviceAccountTokenCreator` and `roles/storage.objectViewer`.
+- **IAM signBlob Integration**: The Google Cloud Storage client delegates signing to the Google Cloud IAM Credentials API `signBlob` endpoint (`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{email}:signBlob`) via Application Default Credentials (ADC).
+- **Zero Local Keys**: Eliminates long-lived private key files from disk and container images.
+- **Status**: **`[UNTESTED - PHASE 12]`** (Scheduled for verification during production Cloud Run infrastructure rollout).
+
