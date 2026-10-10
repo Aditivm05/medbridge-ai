@@ -93,6 +93,7 @@ def request_upload_intent(
     )
 
 
+@router.post("", response_model=DocumentResponse)
 @router.post("/upload-and-verify", response_model=DocumentResponse)
 async def upload_and_verify_document(
     case_id: str,
