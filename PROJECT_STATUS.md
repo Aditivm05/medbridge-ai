@@ -17,11 +17,11 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Phase 6d**: Document access via short-lived HMAC stream URLs and signed URLs — **Status**: Completed | **Tag**: `phase-6d-fakes-only`
   - **Phase 6e**: Gemini multimodal OCR for scanned PDFs and images — **Status**: Completed (mocked tests only) | **Tag**: `phase-6e-fakes-only`
   - **Voice Input**: Speech-to-text / voice intake — **Status**: PLANNED
-- [ ] **Phase 7: AI Doctor Brief (Gemini)** *(In Progress)*
-  - **Phase 7a**: AI Doctor Brief backend: strict Pydantic DoctorBrief schema (no diagnosis/prescription), Gemini generation service with fallback skeleton, document reference validation, structured conflicts list, brief endpoints (`generate`, `get`, `put`, `approve`, `review`), lifecycle (`DRAFT_AI` -> `PATIENT_APPROVED` -> `CLINICIAN_REVIEWED`), version snapshots, and rate limiting — **Status**: Completed (mocked tests passing; endpoints included in 7a)
-  - **Remaining**:
-    - **Phase 7c**: Frontend Doctor Brief review screen (interactive edits, patient approve, clinician review) *(Pending)*
-    - **Real-Gemini brief test**: Live API verification with real Gemini API key *(UNVERIFIED)*
+- [x] **Phase 7: AI Doctor Brief (Gemini)** *(Completed & Verified)*
+  - **Phase 7a**: AI Doctor Brief backend: strict Pydantic DoctorBrief schema (no diagnosis/prescription), Gemini generation service with fallback skeleton, document reference validation, structured conflicts list, brief endpoints (`generate`, `get`, `put`, `approve`, `review`), lifecycle (`DRAFT_AI` -> `PATIENT_APPROVED` -> `CLINICIAN_REVIEWED`), version snapshots, and rate limiting — **Status**: Completed | **Verified**: Backend test suite (16 tests) & live smoke test.
+  - **Phase 7b**: Clinician Review Integration: backend verification and authorization gates on `POST /cases/{case_id}/brief/review`, verified clinician role and assignment checks, duplicate review blocking, immutable audit trail logging — **Status**: Completed | **Verified**: Backend test suite (7 tests) & live smoke test.
+  - **Phase 7c**: Frontend Doctor Brief review screen & Consultation Workspace: real endpoint wiring (`generate`, `get`, `put`, `approve`, `review`), separation of patient-reported and document-extracted facts, source labels (`PATIENT_REPORTED`, `PDF_TEXT`, `AI_EXTRACTED`), prominent missing info & clarification questions, side-by-side unresolved conflicts, permanent safety banner, interactive edit modal invalidating approval, submit button enabled only on approval — **Status**: Completed | **Verified**: Frontend production build (`tsc && vite build`) & ConsultationWorkspace integration.
+  - **Live Integration Smoke Test**: End-to-end verified with running backend, Firebase emulators, and live Gemini API (`gemini-3.8-flash`) on 11 Oct 2026.
 
 ## 3. Files Created Across Phases 1 - 7a
 ### Architecture, Docs & Infrastructure
@@ -85,8 +85,16 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (89/89 Passing):**
-  - `test_phase7a_doctor_brief.py` (12 tests) -> ALL PASSED
+- **Automated Test Suite (104/104 Passing):**
+  - `test_phase7b_clinician_review.py` (7 tests) -> ALL PASSED
+    - `test_clinician_review_success_on_patient_approved_brief` -> PASSED (verified assigned clinician submits review; status CLINICIAN_REVIEWED; reviewedBy, reviewedAt, and audit event recorded)
+    - `test_duplicate_clinician_review_blocked` -> PASSED (duplicate review on already reviewed brief raises 400 Bad Request to protect audit trail)
+    - `test_unverified_clinician_cannot_review` -> PASSED (unverified clinician claim raises 403 Forbidden)
+    - `test_patient_cannot_review` -> PASSED (patient role raises 403 Forbidden)
+    - `test_unassigned_clinician_cannot_review` -> PASSED (unassigned clinician raises 403 Forbidden)
+    - `test_review_blocked_on_invalid_case_status` -> PASSED (review blocked when case is in DRAFT/MATCHING/CANCELLED)
+    - `test_review_persists_in_firestore` -> PASSED (persisted review state survives cache clearing and reloads from Firestore)
+  - `test_phase7a_doctor_brief.py` (16 tests) -> ALL PASSED
     - `test_schema_has_no_diagnosis_or_prescription_fields` -> PASSED (extra='forbid' strictly rejects diagnosis, prescription, or treatment)
     - `test_synthetic_case_a_complete_information` -> PASSED (verbatim complaint, timeline, vitals with exact units, document findings with sources and pages, BRIEF_GENERATED logged without content)
     - `test_synthetic_case_b_missing_information_and_incomplete_documents` -> PASSED (literal 'unknown' preserved, incomplete docs with NEEDS_OCR/FAILED/PROCESSING flagged in missingInformation as not yet read)
@@ -99,6 +107,10 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
     - `test_rbac_and_ownership_gates` -> PASSED (401 unauthenticated, 403 cross-patient, 403 unassigned clinician, 403 clinician in MATCHING/DRAFT, 200 assigned clinician in ACCEPTED, 403 unassigned clinician review)
     - `test_brief_lifecycle_editing_and_reapproval` -> PASSED (PATIENT_APPROVED -> human edit sets EDITED, increments version, saves snapshot in previousVersions; patient cannot edit once SUBMITTED; regenerate over EDITED brief requires confirmRegenerate=true)
     - `test_generation_only_in_draft_and_rate_limiting` -> PASSED (generation blocked when not in DRAFT status, per-case rate limit enforced with 429)
+    - `test_brief_fallback_skeleton_prefills_patient_metadata` -> PASSED (fallback skeleton pre-populates intake symptoms, medications, allergies, vitals)
+    - `test_fallback_skeleton_vitals_without_unit_marks_unit_unknown_never_guessed` -> PASSED (vitals missing units marked 'unknown', never guessed)
+    - `test_vitals_unit_parsing_multi_word_and_non_numeric` -> PASSED (handles multi-word units, non-numeric strings, and boundary values)
+    - `test_vital_source_enum_and_gemini_output_schema` -> PASSED (VitalSource PATIENT_PROVIDED/DEVICE_PROVIDED validated)
   - `test_phase6e_gemini_ocr_extraction.py` (13 tests) -> ALL PASSED
   - `test_phase6d_signed_url_access.py` (19 tests) -> ALL PASSED
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
@@ -106,8 +118,15 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
-- **Phase 7a Verification Status:**
-  - **Real-Gemini brief generation**: **`UNVERIFIED`** *(awaiting manual user test run with real GEMINI_API_KEY)*.
+
+- **Phase 7 Live Integration Smoke Test (11 Oct 2026 — VERIFIED):**
+  - **Environment**: FastAPI backend on port 8000 healthy; Firebase Auth (9099), Firestore (8080), Storage (9199) reachable; Gemini API key configured with model `gemini-3.8-flash`.
+  - **Live Gemini Brief Generation**: Created synthetic case in DRAFT; invoked live `POST /cases/{id}/brief/generate`; verified strict schema conformance, verbatim chief complaint preservation, zero diagnosis/prescription fields, and structured vitals/gaps/questions.
+  - **Patient Review & Invalidation**: Updated brief via `PUT /cases/{id}/brief`; verified previous approval invalidated (`briefStatus: EDITED`, version incremented); approved via `POST /cases/{id}/brief/approve` (`briefStatus: PATIENT_APPROVED`); verified persisted state retained across reload (`GET /cases/{id}/brief`).
+  - **Clinician Review Integration**: Case transitioned to `SUBMITTED` -> `MATCHING` -> `ACCEPTED` by assigned verified clinician; verified unverified clinician blocked (403), unassigned clinician blocked (403), patient review blocked (403); assigned clinician review signed off with notes (`POST /cases/{id}/brief/review`, `briefStatus: CLINICIAN_REVIEWED`); duplicate review blocked (400).
+  - **Audit Trail**: Full lifecycle audit trail verified in Firestore: `['CASE_CREATED', 'CASE_UPDATED', 'BRIEF_GENERATED', 'BRIEF_EDITED', 'BRIEF_APPROVED', 'CASE_SUBMITTED', 'CASE_MATCHING_ENQUEUED', 'CASE_ACCEPTED', 'BRIEF_CLINICIAN_REVIEWED']`.
+  - **Scope Distinction**: Live integration verified against live running backend server, Firebase emulators, and Google Gemini API. Controlled failure handling (timeout, 429/5xx backoff, 400 fail-fast, malformed JSON fallback) verified via unit tests with mocks. Note: Browser-level end-to-end automation was not executed in this headless smoke test; API and component integration were verified via production build and live API execution.
+
 - **Phase 6 Verification Status:**
   - **Real-Gemini multimodal extraction**: **`UNVERIFIED`** *(awaiting manual user test run with real GEMINI_API_KEY)*.
   - **Stream endpoint on the real emulator**: **`UNVERIFIED`** *(awaiting manual user test run)*.
@@ -116,16 +135,13 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in emulator UI)*.
   - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
   - **Phase 12 IAM signBlob production signing**: **`UNTESTED`** *(documented in ARCHITECTURE.md for production Cloud Run deployment)*.
-- **Phase 6b Frontend Upload UI:**
-  - `DocumentUploadScreen.tsx` updated with drag & drop file picker, client checks (PDF/JPG/PNG, max 10 MB, max 5 files), `XMLHttpRequest` real progress tracking, in-memory queue, status badges (`Selected`, `Uploading`, `Confirmed by server`, `Failed`), per-file retry mechanism, and error mapping.
-  - `api.uploadDocument` implemented in `frontend/src/services/api.ts` with `xhr.upload.onprogress`.
-- **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
+
+- **Frontend Production Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors, built in 2.92s).
 
 ## 5. Next Steps
-- User will review Phase 7a backend test outputs and git diff.
-- Do NOT start servers.
-- Do NOT commit, amend, or tag.
-- Next implementation target: Phase 7c frontend Doctor Brief review screen.
+- Phase 7 (AI Doctor Brief, Clinician Review Integration, and Review UI) is complete and verified.
+- Next implementation target: Phase 8 (Consultation & Follow-up live workflow / real-time updates).
+- Do NOT push to remote without user instruction.
 
 ## 6. Known Limitations & Tech Debt
 
@@ -135,8 +151,9 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 3. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
 
 ### Technical Debt & Known Issues
-3. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
-4. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
-5. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
+1. **Starlette Deprecation Warning**: Pytest reports `.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using 'httpx' with 'starlette.testclient' is deprecated; install 'httpx2' instead.` (harmless library notice from FastAPI's internal testclient import).
+2. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
+3. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
+4. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
 
 
