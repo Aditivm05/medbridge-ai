@@ -796,3 +796,114 @@ def test_generation_only_in_draft_and_rate_limiting():
     )
     assert res_rl.status_code == 429
     assert "rate limit exceeded" in res_rl.json()["detail"]
+
+
+def test_brief_fallback_skeleton_prefills_patient_metadata():
+    """
+    Requirement 2:
+    When brief generation fails, pre-fill the fallback skeleton with the patient's own
+    entered history, medications, allergies, and vitals from case metadata,
+    labelled PATIENT_REPORTED. Leave everything else unknown.
+    """
+    patient_uid = "patient_7a_fallback_meta"
+    case = case_service.create_case(
+        CaseCreate(
+            chiefComplaint="Sudden onset severe dizziness and nausea",
+            duration="2 days",
+            requestedUrgency=RequestedUrgency.URGENT,
+            patientLanguage="en",
+            idempotencyKey="idem_7a_fallback_meta",
+        ),
+        actor_id=patient_uid,
+    )
+
+    # Attach patient entered history, medications, allergies and vitals to case metadata
+    case_service.update_case(
+        case.caseId,
+        update_in=CaseUpdate(
+            metadata={
+                "knownConditions": "Type 2 Diabetes Mellitus; Hypertension",
+                "medications": "Metformin 500mg BID; Lisinopril 10mg daily",
+                "allergies": "Penicillin (causes severe hives)",
+                "vitals": {
+                    "bloodPressure": "135/88 mmHg",
+                    "heartRate": "76 bpm",
+                    "temperature": "98.6 F",
+                },
+            }
+        ),
+        actor_id=patient_uid,
+        actor_role="patient",
+    )
+
+    # Configure Gemini mock client to simulate total AI failure
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = RuntimeError("Gemini AI API connection refused")
+    brief_service.set_client_for_testing(mock_client)
+
+    # Request brief generation -> Falls back to skeleton
+    res = client.post(
+        f"/api/v1/cases/{case.caseId}/brief/generate",
+        headers=auth_header(patient_uid),
+    )
+    assert res.status_code == 200
+    brief_data = res.json()
+
+    # Verify patient reported intake data is preserved and labelled PATIENT_REPORTED
+    assert brief_data["reasonForConsultation"] == "Sudden onset severe dizziness and nausea"
+    assert brief_data["timelineAndDetails"] == "unknown"
+
+    # History
+    history_facts = brief_data["relevantHistory"]
+    assert len(history_facts) == 2
+    for item in history_facts:
+        assert item["source"] == "PATIENT_REPORTED"
+        assert item["reference"] == "intake:knownConditions"
+    assert any("Diabetes" in item["fact"] for item in history_facts)
+    assert any("Hypertension" in item["fact"] for item in history_facts)
+
+    # Medications
+    med_facts = brief_data["currentMedications"]
+    assert len(med_facts) == 2
+    for item in med_facts:
+        assert item["source"] == "PATIENT_REPORTED"
+        assert item["reference"] == "intake:medications"
+    assert any("Metformin" in item["fact"] for item in med_facts)
+    assert any("Lisinopril" in item["fact"] for item in med_facts)
+
+    # Allergies
+    allergy_facts = brief_data["patientReportedAllergies"]
+    assert len(allergy_facts) == 1
+    assert allergy_facts[0]["source"] == "PATIENT_REPORTED"
+    assert allergy_facts[0]["reference"] == "intake:allergies"
+    assert "Penicillin" in allergy_facts[0]["fact"]
+
+    # Vitals
+    vitals_list = brief_data["vitals"]
+    assert len(vitals_list) == 3
+    for v in vitals_list:
+        assert v["source"] == "PATIENT_REPORTED"
+        assert v["reference"] == "intake:vitals"
+    vital_names = {v["name"] for v in vitals_list}
+    assert "bloodPressure" in vital_names
+    assert "heartRate" in vital_names
+    assert "temperature" in vital_names
+
+    # Everything else left unknown
+    assert brief_data["documentFindings"] == []
+    assert brief_data["conflicts"] == []
+    assert brief_data["clarificationQuestions"] == []
+    assert any("AI brief generation unavailable or failed" in m for m in brief_data["missingInformation"])
+    assert any("AI generation failed" in w for w in brief_data["validationWarnings"])
+
+    # Source references include patient intake sources
+    source_refs = brief_data["sourceReferences"]
+    ref_keys = {sr["reference"] for sr in source_refs}
+    assert "chiefComplaint" in ref_keys
+    assert "intake:knownConditions" in ref_keys
+    assert "intake:medications" in ref_keys
+    assert "intake:allergies" in ref_keys
+    assert "intake:vitals" in ref_keys
+    for sr in source_refs:
+        assert sr["sourceType"] == "PATIENT_REPORTED"
+

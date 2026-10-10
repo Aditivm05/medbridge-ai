@@ -2,6 +2,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _BACKEND_DIR / ".env"
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MedBridge AI"
     VERSION: str = "1.0.0"
@@ -32,7 +38,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
     
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(str(_ENV_FILE), ".env"),
+        extra="ignore",
+    )
 
 
 settings = Settings()

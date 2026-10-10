@@ -316,6 +316,21 @@ def get_document_extracted_text(
             detail=f"Document '{document_id}' not found for case '{case_id}'.",
         )
 
+    if doc.extractionStatus == ExtractionStatus.FAILED:
+        return DocumentTextResponse(
+            documentId=doc.documentId,
+            caseId=doc.caseId,
+            extractionStatus=doc.extractionStatus,
+            extractionSource=doc.extractionSource,
+            requiresHumanReview=doc.requiresHumanReview,
+            pageCount=None,
+            pages=[],
+            extractedFields=[],
+            fullText=None,
+            errorMessage=doc.errorMessage,
+            extractedAt=doc.extractedAt,
+        )
+
     return DocumentTextResponse(
         documentId=doc.documentId,
         caseId=doc.caseId,

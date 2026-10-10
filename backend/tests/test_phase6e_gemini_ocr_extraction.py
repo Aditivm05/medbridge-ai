@@ -644,3 +644,40 @@ def test_endpoint_trigger_document_ocr():
     assert data["extractionStatus"] == "EXTRACTED"
     assert data["ocrStatus"] == "completed"
     assert data["extractionSource"] == "AI_EXTRACTED"
+
+
+def test_failed_document_returns_no_extracted_pages():
+    """
+    Requirement 4:
+    A FAILED document should return no extracted pages (pages=[] and fullText=None).
+    """
+    case_id, doc_id, file_bytes = setup_case_with_document(key_suffix="failed_doc_pages", is_image=True)
+
+    # Configure mock client to fail OCR
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = Exception("OCR model failure")
+    gemini_ocr_service.set_client_for_testing(mock_client)
+
+    # Process OCR -> Fails
+    failed_doc = document_service.process_gemini_ocr(
+        document_id=doc_id,
+        file_bytes=file_bytes,
+        case_id=case_id,
+    )
+    assert failed_doc.extractionStatus == ExtractionStatus.FAILED
+    assert failed_doc.pages == []
+    assert failed_doc.extractedText is None
+    assert failed_doc.pageCount is None
+
+    # Query /text endpoint -> strictly returns pages=[] and fullText=None
+    res = client.get(
+        f"/api/v1/cases/{case_id}/documents/{doc_id}/text",
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert res.status_code == 200
+    text_data = res.json()
+    assert text_data["extractionStatus"] == "FAILED"
+    assert text_data["pages"] == []
+    assert text_data["fullText"] is None
+    assert text_data["pageCount"] is None
+

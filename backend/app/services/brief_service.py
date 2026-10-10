@@ -383,6 +383,7 @@ class BriefService:
                     case_id=case_id,
                     reason_for_consultation=case.chiefComplaint,
                     validation_warnings=[f"AI generation failed: {error_msg}"] if error_msg else None,
+                    metadata=case.metadata,
                 )
                 blank.version = new_version
                 blank.previousVersions = prev_versions

@@ -197,6 +197,117 @@ def test_case_crud_lifecycle_and_draft_patch_guard():
     assert cancel_res.json()["status"] == "CANCELLED"
 
 
+def test_case_metadata_allowlist_enforcement():
+    """Verifies CaseUpdate.metadata strictly accepts allowlisted keys and rejects arbitrary/server keys."""
+    # 1. Allowed keys pass validation
+    valid_update = CaseUpdate(
+        metadata={
+            "symptoms": ["cough", "mild fever"],
+            "knownConditions": "Asthma",
+            "medications": "Albuterol inhaler",
+            "allergies": "None",
+            "vitals": {"temperature": "99.1 F", "heartRate": 80},
+        }
+    )
+    assert valid_update.metadata is not None
+    assert "symptoms" in valid_update.metadata
+
+    # 2. Arbitrary/unexpected keys are rejected
+    with pytest.raises(ValueError, match="Disallowed metadata key 'arbitraryKey'"):
+        CaseUpdate(metadata={"arbitraryKey": "some_value"})
+
+    # 3. Server-controlled flags/counters cannot be injected
+    for forbidden_key in ["rateLimit", "doctorBriefId", "status", "version", "admin", "isVerified"]:
+        with pytest.raises(ValueError, match=f"Disallowed metadata key '{forbidden_key}'"):
+            CaseUpdate(metadata={forbidden_key: "hack"})
+
+
+def test_case_metadata_size_limits_enforcement():
+    """Verifies CaseUpdate.metadata enforces strict size and item limits."""
+    # String field exceeds limit (> 2000 chars)
+    oversized_str = "A" * 2001
+    with pytest.raises(ValueError, match="cannot exceed 2000 characters"):
+        CaseUpdate(metadata={"knownConditions": oversized_str})
+
+    # Symptoms list exceeds item count (> 30 items)
+    with pytest.raises(ValueError, match="symptoms list cannot exceed 30 items"):
+        CaseUpdate(metadata={"symptoms": [f"symptom_{i}" for i in range(31)]})
+
+    # Symptom item exceeds character limit (> 200 chars)
+    with pytest.raises(ValueError, match="Each symptom item must be a string <= 200 characters"):
+        CaseUpdate(metadata={"symptoms": ["X" * 201]})
+
+    # Vitals exceeds dictionary entries (> 15 items)
+    oversized_vitals = {f"v_{i}": "normal" for i in range(16)}
+    with pytest.raises(ValueError, match="vitals cannot exceed 15 entries"):
+        CaseUpdate(metadata={"vitals": oversized_vitals})
+
+
+def test_case_metadata_draft_only_merge_and_post_submission_block():
+    """Verifies metadata merging is permitted only in DRAFT status and blocked in SUBMITTED."""
+    # Create case
+    res = client.post(
+        "/api/v1/cases",
+        json={
+            "chiefComplaint": "Persistent dry cough",
+            "duration": "3 days",
+            "requestedUrgency": "routine",
+            "patientLanguage": "en",
+            "idempotencyKey": "idem_meta_merge_test_1",
+        },
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert res.status_code == 201
+    case_id = res.json()["caseId"]
+
+    # 1. First metadata update in DRAFT -> merges successfully
+    patch1 = client.patch(
+        f"/api/v1/cases/{case_id}",
+        json={"metadata": {"symptoms": ["cough"], "knownConditions": "None"}},
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert patch1.status_code == 200
+    assert patch1.json()["metadata"]["symptoms"] == ["cough"]
+    assert patch1.json()["metadata"]["knownConditions"] == "None"
+
+    # 2. Second metadata update in DRAFT -> merges with previous
+    patch2 = client.patch(
+        f"/api/v1/cases/{case_id}",
+        json={"metadata": {"medications": "None", "allergies": "Penicillin"}},
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert patch2.status_code == 200
+    meta2 = patch2.json()["metadata"]
+    assert meta2["symptoms"] == ["cough"]
+    assert meta2["knownConditions"] == "None"
+    assert meta2["medications"] == "None"
+    assert meta2["allergies"] == "Penicillin"
+
+    # 3. Patching with disallowed key via HTTP endpoint -> HTTP 422 Unprocessable Entity
+    patch_bad = client.patch(
+        f"/api/v1/cases/{case_id}",
+        json={"metadata": {"rate_limit": 999}},
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert patch_bad.status_code == 422
+
+    # 4. Submit case -> transitions to SUBMITTED
+    submit_res = client.post(
+        f"/api/v1/cases/{case_id}/submit",
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert submit_res.status_code == 200
+
+    # 5. Attempt metadata update while SUBMITTED -> Strictly rejected with HTTP 400
+    patch_submitted = client.patch(
+        f"/api/v1/cases/{case_id}",
+        json={"metadata": {"symptoms": ["cough worse"]}},
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert patch_submitted.status_code == 400
+    assert "Cases can only be edited while in DRAFT status" in patch_submitted.json()["detail"]
+
+
 # ==============================================================================
 # 3. IDEMPOTENT SUBMISSION & CREATION TESTS
 # ==============================================================================

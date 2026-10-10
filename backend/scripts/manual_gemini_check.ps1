@@ -24,7 +24,6 @@ param (
     [string]$AuthEmulatorUrl = "http://127.0.0.1:9099"
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 Write-Host "================================================================================" -ForegroundColor Cyan
@@ -263,10 +262,28 @@ try {
     Write-Host $brief.reasonForConsultation -ForegroundColor White
 
     Write-Host "`n--- TIMELINE & DETAILS ---" -ForegroundColor Yellow
-    Write-Host "Timeline:               $($brief.timeline)" -ForegroundColor White
-    Write-Host "Relevant History:       $($brief.relevantHistory)" -ForegroundColor White
-    Write-Host "Current Medications:    $($brief.currentMedications)" -ForegroundColor White
-    Write-Host "Allergies:              $($brief.patientReportedAllergies)" -ForegroundColor White
+    Write-Host "Timeline & Details:     $($brief.timelineAndDetails)" -ForegroundColor White
+
+    Write-Host "`n--- RELEVANT HISTORY ---" -ForegroundColor Yellow
+    if ($brief.relevantHistory -and $brief.relevantHistory.Count -gt 0) {
+        $brief.relevantHistory | Format-Table -Property fact, source, reference -AutoSize
+    } else {
+        Write-Host "(None reported)" -ForegroundColor Gray
+    }
+
+    Write-Host "`n--- CURRENT MEDICATIONS ---" -ForegroundColor Yellow
+    if ($brief.currentMedications -and $brief.currentMedications.Count -gt 0) {
+        $brief.currentMedications | Format-Table -Property fact, source, reference -AutoSize
+    } else {
+        Write-Host "(None reported)" -ForegroundColor Gray
+    }
+
+    Write-Host "`n--- REPORTED ALLERGIES ---" -ForegroundColor Yellow
+    if ($brief.patientReportedAllergies -and $brief.patientReportedAllergies.Count -gt 0) {
+        $brief.patientReportedAllergies | Format-Table -Property fact, source, reference -AutoSize
+    } else {
+        Write-Host "(None reported)" -ForegroundColor Gray
+    }
 
     Write-Host "`n--- REPORTED VITALS ---" -ForegroundColor Yellow
     if ($brief.vitals -and $brief.vitals.Count -gt 0) {
@@ -322,6 +339,47 @@ try {
 }
 catch {
     Write-Error "Failed to generate AI Doctor Brief. Details: $_"
+    exit 1
+}
+
+# ------------------------------------------------------------------------------
+# 7. Final Verification Evaluation & Failure Summary
+# ------------------------------------------------------------------------------
+$failures = @()
+
+if (-not $finalDoc -or $finalDoc.extractionStatus -ne "EXTRACTED") {
+    $docStatus = if ($finalDoc) { $finalDoc.extractionStatus } else { "TIMEOUT" }
+    $docErr = if ($finalDoc -and $finalDoc.errorMessage) { " ($($finalDoc.errorMessage))" } else { "" }
+    $failures += "Document OCR / extraction failed or did not reach EXTRACTED status (Status: $docStatus)$docErr"
+}
+
+if ($brief) {
+    if ($brief.validationWarnings) {
+        foreach ($w in $brief.validationWarnings) {
+            if ($w -match "AI generation failed" -or $w -match "AI brief generation unavailable") {
+                $failures += "Doctor Brief fell back to skeleton due to AI generation warning: $w"
+            }
+        }
+    }
+    if ($brief.missingInformation) {
+        foreach ($m in $brief.missingInformation) {
+            if ($m -match "AI brief generation unavailable or failed") {
+                if (-not ($failures -match "AI brief generation unavailable or failed")) {
+                    $failures += "Doctor Brief fell back to skeleton: $m"
+                }
+            }
+        }
+    }
+}
+
+if ($failures.Count -gt 0) {
+    Write-Host "`n================================================================================" -ForegroundColor Red
+    Write-Host "  FAIL / WARN SUMMARY" -ForegroundColor Red
+    Write-Host "================================================================================" -ForegroundColor Red
+    foreach ($f in $failures) {
+        Write-Host " [FAIL] $f" -ForegroundColor Red
+    }
+    Write-Host "`nLive verification failed. Exiting with non-zero status code." -ForegroundColor Red
     exit 1
 }
 

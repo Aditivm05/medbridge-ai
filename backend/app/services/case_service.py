@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 
 from app.core.state_machine import CaseStatus, validate_transition, InvalidStateTransitionError
-from app.schemas.case import CaseCreate, CaseUpdate, CaseResponse
+from app.schemas.case import CaseCreate, CaseUpdate, CaseResponse, validate_case_metadata
 from app.schemas.audit import AuditEventType
 from app.services.audit_service import audit_service
 from app.core.firestore_client import get_firestore_client, firestore_transactional
@@ -219,6 +219,7 @@ class CaseService:
             if update_in.metadata is not None:
                 current_meta = dict(case.metadata or {})
                 current_meta.update(update_in.metadata)
+                validate_case_metadata(current_meta)
                 update_data["metadata"] = current_meta
 
             updated_case = case.model_copy(update=update_data)

@@ -26,6 +26,7 @@ class FactSource(str, Enum):
 class VitalSource(str, Enum):
     PATIENT_PROVIDED = "PATIENT_PROVIDED"
     DEVICE_PROVIDED = "DEVICE_PROVIDED"
+    PATIENT_REPORTED = "PATIENT_REPORTED"
 
 
 class ExtractionSource(str, Enum):
@@ -164,13 +165,154 @@ class DoctorBriefClinicianReviewRequest(BaseModel):
     clinicianNotes: Optional[str] = None
 
 
+def _parse_metadata_sourced_facts(raw_val: Any, field_name: str) -> List[SourcedFact]:
+    facts: List[SourcedFact] = []
+    if not raw_val:
+        return facts
+    if isinstance(raw_val, list):
+        for item in raw_val:
+            s_item = str(item).strip()
+            if s_item:
+                facts.append(
+                    SourcedFact(
+                        fact=s_item,
+                        source=FactSource.PATIENT_REPORTED,
+                        reference=f"intake:{field_name}",
+                    )
+                )
+    elif isinstance(raw_val, str):
+        lines = [line.strip() for line in raw_val.replace(";", "\n").split("\n") if line.strip()]
+        for line in lines:
+            facts.append(
+                SourcedFact(
+                    fact=line,
+                    source=FactSource.PATIENT_REPORTED,
+                    reference=f"intake:{field_name}",
+                )
+            )
+    return facts
+
+
+def _parse_metadata_vitals(raw_vitals: Any) -> List[VitalFinding]:
+    findings: List[VitalFinding] = []
+    if not raw_vitals:
+        return findings
+
+    if isinstance(raw_vitals, dict):
+        for k, v in raw_vitals.items():
+            name = str(k).strip()
+            val_str = str(v).strip()
+            unit_str = "unknown"
+            if " " in val_str:
+                parts = val_str.rsplit(" ", 1)
+                val_str = parts[0].strip()
+                unit_str = parts[1].strip()
+            findings.append(
+                VitalFinding(
+                    name=name,
+                    value=val_str or "unknown",
+                    unit=unit_str or "unknown",
+                    source=VitalSource.PATIENT_REPORTED,
+                    reference="intake:vitals",
+                )
+            )
+    elif isinstance(raw_vitals, list):
+        for item in raw_vitals:
+            if isinstance(item, dict):
+                findings.extend(_parse_metadata_vitals(item))
+            elif isinstance(item, str):
+                findings.extend(_parse_metadata_vitals(item))
+    elif isinstance(raw_vitals, str):
+        chunks = [c.strip() for c in raw_vitals.replace(";", ",").split(",") if c.strip()]
+        for chunk in chunks:
+            if ":" in chunk:
+                name_part, val_part = chunk.split(":", 1)
+                name = name_part.strip()
+                val_part = val_part.strip()
+                unit = "unknown"
+                if " " in val_part:
+                    p = val_part.rsplit(" ", 1)
+                    val = p[0].strip()
+                    unit = p[1].strip()
+                else:
+                    val = val_part
+                findings.append(
+                    VitalFinding(
+                        name=name,
+                        value=val or "unknown",
+                        unit=unit or "unknown",
+                        source=VitalSource.PATIENT_REPORTED,
+                        reference="intake:vitals",
+                    )
+                )
+            else:
+                findings.append(
+                    VitalFinding(
+                        name="vital",
+                        value=chunk.strip(),
+                        unit="unknown",
+                        source=VitalSource.PATIENT_REPORTED,
+                        reference="intake:vitals",
+                    )
+                )
+    return findings
+
+
 def create_blank_brief_skeleton(
     case_id: str,
     reason_for_consultation: str,
     validation_warnings: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> DoctorBrief:
-    """Creates a blank DoctorBrief skeleton for manual entry upon generation failure."""
+    """
+    Creates a DoctorBrief skeleton for manual entry upon generation failure.
+    Pre-fills the patient's own entered history, medications, allergies, and vitals
+    from case metadata, labelled PATIENT_REPORTED. Leaves everything else unknown.
+    """
     now = datetime.utcnow()
+    meta = metadata or {}
+
+    history_val = meta.get("knownConditions") or meta.get("history")
+    relevant_history = _parse_metadata_sourced_facts(history_val, "knownConditions")
+    medications = _parse_metadata_sourced_facts(meta.get("medications"), "medications")
+    allergies = _parse_metadata_sourced_facts(meta.get("allergies"), "allergies")
+    vitals = _parse_metadata_vitals(meta.get("vitals"))
+
+    source_refs = [
+        SourceReference(
+            sourceType=FactSource.PATIENT_REPORTED,
+            reference="chiefComplaint",
+        )
+    ]
+    if relevant_history:
+        source_refs.append(
+            SourceReference(
+                sourceType=FactSource.PATIENT_REPORTED,
+                reference="intake:knownConditions",
+            )
+        )
+    if medications:
+        source_refs.append(
+            SourceReference(
+                sourceType=FactSource.PATIENT_REPORTED,
+                reference="intake:medications",
+            )
+        )
+    if allergies:
+        source_refs.append(
+            SourceReference(
+                sourceType=FactSource.PATIENT_REPORTED,
+                reference="intake:allergies",
+            )
+        )
+    if vitals:
+        source_refs.append(
+            SourceReference(
+                sourceType=FactSource.PATIENT_REPORTED,
+                reference="intake:vitals",
+            )
+        )
+
     return DoctorBrief(
         briefId=f"brief_{uuid.uuid4().hex[:12]}",
         caseId=case_id,
@@ -179,20 +321,15 @@ def create_blank_brief_skeleton(
         briefStatus=BriefStatus.DRAFT_AI,
         reasonForConsultation=reason_for_consultation or "unknown",
         timelineAndDetails="unknown",
-        relevantHistory=[],
-        currentMedications=[],
-        patientReportedAllergies=[],
-        vitals=[],
+        relevantHistory=relevant_history,
+        currentMedications=medications,
+        patientReportedAllergies=allergies,
+        vitals=vitals,
         documentFindings=[],
         conflicts=[],
         missingInformation=["AI brief generation unavailable or failed; manual clinical entry required."],
         clarificationQuestions=[],
-        sourceReferences=[
-            SourceReference(
-                sourceType=FactSource.PATIENT_REPORTED,
-                reference="chiefComplaint",
-            )
-        ],
+        sourceReferences=source_refs,
         validationWarnings=validation_warnings or [],
         disclaimer=DISCLAIMER,
         createdAt=now,

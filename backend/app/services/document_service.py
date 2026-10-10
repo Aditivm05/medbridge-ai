@@ -357,6 +357,10 @@ class DocumentService:
             error_msg = f"Unsupported MIME type for text extraction: '{target_mime}'."
 
         now = datetime.utcnow()
+        if status == ExtractionStatus.FAILED:
+            pages = []
+            full_text = None
+            page_count = None
         extraction_source = "PDF_TEXT" if status == ExtractionStatus.EXTRACTED else None
         updated_doc = doc.model_copy(
             update={
@@ -487,6 +491,9 @@ class DocumentService:
                     update={
                         "extractionStatus": ExtractionStatus.FAILED,
                         "ocrStatus": "failed",
+                        "pages": [],
+                        "extractedText": None,
+                        "pageCount": None,
                         "errorMessage": fail_msg,
                         "extractedAt": now,
                     }
@@ -522,6 +529,9 @@ class DocumentService:
                     update={
                         "extractionStatus": ExtractionStatus.FAILED,
                         "ocrStatus": "failed",
+                        "pages": [],
+                        "extractedText": None,
+                        "pageCount": None,
                         "errorMessage": error_msg or "Gemini OCR extraction failed.",
                         "extractedAt": now,
                     }
