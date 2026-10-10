@@ -882,7 +882,7 @@ def test_brief_fallback_skeleton_prefills_patient_metadata():
     vitals_list = brief_data["vitals"]
     assert len(vitals_list) == 3
     for v in vitals_list:
-        assert v["source"] == "PATIENT_REPORTED"
+        assert v["source"] == "PATIENT_PROVIDED"
         assert v["reference"] == "intake:vitals"
     vital_names = {v["name"] for v in vitals_list}
     assert "bloodPressure" in vital_names
@@ -906,4 +906,239 @@ def test_brief_fallback_skeleton_prefills_patient_metadata():
     assert "intake:vitals" in ref_keys
     for sr in source_refs:
         assert sr["sourceType"] == "PATIENT_REPORTED"
+
+
+def test_fallback_skeleton_vitals_without_unit_marks_unit_unknown_never_guessed():
+    """
+    Requirement:
+    When a patient vitals value has no unit (e.g. {"heartRate": 98}),
+    the unit in the fallback skeleton must strictly be 'unknown', never guessed.
+    """
+    from app.schemas.doctor_brief import create_blank_brief_skeleton
+
+    # 1. Direct skeleton generation verification
+    skeleton = create_blank_brief_skeleton(
+        case_id="case_no_unit_vitals",
+        reason_for_consultation="Palpitations",
+        metadata={
+            "vitals": {
+                "heartRate": 98,
+                "bloodPressure": "120/80",
+                "respiratoryRate": 16,
+            }
+        },
+    )
+    assert len(skeleton.vitals) == 3
+    vitals_map = {v.name: v for v in skeleton.vitals}
+
+    assert vitals_map["heartRate"].value == "98"
+    assert vitals_map["heartRate"].unit == "unknown"
+    assert vitals_map["heartRate"].source == "PATIENT_PROVIDED"
+    assert vitals_map["heartRate"].reference == "intake:vitals"
+
+    assert vitals_map["bloodPressure"].value == "120/80"
+    assert vitals_map["bloodPressure"].unit == "unknown"
+    assert vitals_map["bloodPressure"].source == "PATIENT_PROVIDED"
+    assert vitals_map["bloodPressure"].reference == "intake:vitals"
+
+    assert vitals_map["respiratoryRate"].value == "16"
+    assert vitals_map["respiratoryRate"].unit == "unknown"
+    assert vitals_map["respiratoryRate"].source == "PATIENT_PROVIDED"
+    assert vitals_map["respiratoryRate"].reference == "intake:vitals"
+
+    # 2. End-to-end service generation on AI failure verification
+    patient_uid = "patient_no_unit_live"
+    case = case_service.create_case(
+        CaseCreate(
+            chiefComplaint="Racing heart sensations at rest",
+            duration="1 day",
+            requestedUrgency=RequestedUrgency.ROUTINE,
+            patientLanguage="en",
+            idempotencyKey="idem_no_unit_live",
+        ),
+        actor_id=patient_uid,
+    )
+    case_service.update_case(
+        case.caseId,
+        update_in=CaseUpdate(
+            metadata={
+                "vitals": {"heartRate": 98},
+            }
+        ),
+        actor_id=patient_uid,
+        actor_role="patient",
+    )
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = Exception("AI backend unavailable")
+    brief_service.set_client_for_testing(mock_client)
+
+    res = client.post(
+        f"/api/v1/cases/{case.caseId}/brief/generate",
+        headers=auth_header(patient_uid),
+    )
+    assert res.status_code == 200
+    brief_json = res.json()
+    assert len(brief_json["vitals"]) == 1
+    hr_vital = brief_json["vitals"][0]
+    assert hr_vital["name"] == "heartRate"
+    assert hr_vital["value"] == "98"
+    assert hr_vital["unit"] == "unknown"
+    assert hr_vital["source"] == "PATIENT_PROVIDED"
+    assert hr_vital["reference"] == "intake:vitals"
+
+
+def test_vitals_unit_parsing_multi_word_and_non_numeric():
+    """
+    Requirement:
+    In _parse_metadata_vitals:
+    - Multi-word units like '128/82 mm Hg' must preserve value '128/82' and unit 'mm Hg'.
+    - '11.2 g/dL' -> value '11.2', unit 'g/dL'.
+    - '98.6 °F' -> value '98.6', unit '°F'.
+    - '98' -> value '98', unit 'unknown'.
+    - '36.6 deg C' -> value '36.6', unit 'deg C'.
+    - Non-numeric value like 'normal' -> value 'normal', unit 'unknown'.
+    - Units must never be guessed or converted.
+    - If text after leading number contains digit or >12 chars: keep whole string as value, unit 'unknown'.
+    - Handle leading minus sign (e.g. '-2 mm' -> '-2', 'mm').
+    - Handle thousands commas (e.g. '1,200 cells/µL' -> '1,200', 'cells/µL').
+    - '120 over 80 mmHg' -> value '120 over 80 mmHg', unit 'unknown'.
+    """
+    from app.schemas.doctor_brief import _split_vital_val_and_unit, create_blank_brief_skeleton, VitalSource
+
+    # 1. Test helper function directly
+    assert _split_vital_val_and_unit("120 over 80 mmHg") == ("120 over 80 mmHg", "unknown")
+    assert _split_vital_val_and_unit("-2 mm") == ("-2", "mm")
+    assert _split_vital_val_and_unit("1,200 cells/µL") == ("1,200", "cells/µL")
+    assert _split_vital_val_and_unit("128/82 mm Hg") == ("128/82", "mm Hg")
+    assert _split_vital_val_and_unit("11.2 g/dL") == ("11.2", "g/dL")
+    assert _split_vital_val_and_unit("98.6 °F") == ("98.6", "°F")
+    assert _split_vital_val_and_unit("98") == ("98", "unknown")
+    assert _split_vital_val_and_unit(98) == ("98", "unknown")
+    assert _split_vital_val_and_unit("-2") == ("-2", "unknown")
+    assert _split_vital_val_and_unit("1,200") == ("1,200", "unknown")
+    assert _split_vital_val_and_unit("36.6 deg C") == ("36.6", "deg C")
+    assert _split_vital_val_and_unit("normal") == ("normal", "unknown")
+    # More than 12 characters after leading number
+    assert _split_vital_val_and_unit("100 beats per minute resting") == ("100 beats per minute resting", "unknown")
+
+    # 2. Test in create_blank_brief_skeleton via dict vitals
+    skeleton = create_blank_brief_skeleton(
+        case_id="case_vitals_units",
+        reason_for_consultation="Routine checkup",
+        metadata={
+            "vitals": {
+                "bloodPressure": "128/82 mm Hg",
+                "hemoglobin": "11.2 g/dL",
+                "temperature": "98.6 °F",
+                "heartRate": "98",
+                "temperatureCelsius": "36.6 deg C",
+                "heartRhythm": "normal",
+                "bpDescriptive": "120 over 80 mmHg",
+                "skinLesion": "-2 mm",
+                "wbcCount": "1,200 cells/µL",
+            }
+        },
+    )
+    vmap = {v.name: v for v in skeleton.vitals}
+
+    assert vmap["bloodPressure"].value == "128/82"
+    assert vmap["bloodPressure"].unit == "mm Hg"
+    assert vmap["bloodPressure"].source == VitalSource.PATIENT_PROVIDED
+    assert vmap["bloodPressure"].reference == "intake:vitals"
+
+    assert vmap["hemoglobin"].value == "11.2"
+    assert vmap["hemoglobin"].unit == "g/dL"
+
+    assert vmap["temperature"].value == "98.6"
+    assert vmap["temperature"].unit == "°F"
+
+    assert vmap["heartRate"].value == "98"
+    assert vmap["heartRate"].unit == "unknown"
+
+    assert vmap["temperatureCelsius"].value == "36.6"
+    assert vmap["temperatureCelsius"].unit == "deg C"
+
+    assert vmap["heartRhythm"].value == "normal"
+    assert vmap["heartRhythm"].unit == "unknown"
+
+    assert vmap["bpDescriptive"].value == "120 over 80 mmHg"
+    assert vmap["bpDescriptive"].unit == "unknown"
+    assert vmap["bpDescriptive"].source == VitalSource.PATIENT_PROVIDED
+    assert vmap["bpDescriptive"].reference == "intake:vitals"
+
+    assert vmap["skinLesion"].value == "-2"
+    assert vmap["skinLesion"].unit == "mm"
+    assert vmap["skinLesion"].source == VitalSource.PATIENT_PROVIDED
+    assert vmap["skinLesion"].reference == "intake:vitals"
+
+    assert vmap["wbcCount"].value == "1,200"
+    assert vmap["wbcCount"].unit == "cells/µL"
+    assert vmap["wbcCount"].source == VitalSource.PATIENT_PROVIDED
+    assert vmap["wbcCount"].reference == "intake:vitals"
+
+    # 3. Test in create_blank_brief_skeleton via formatted string vitals
+    skeleton_str = create_blank_brief_skeleton(
+        case_id="case_vitals_str",
+        reason_for_consultation="Routine checkup",
+        metadata={
+            "vitals": (
+                "BP: 128/82 mm Hg, Hgb: 11.2 g/dL, Temp: 98.6 °F, HR: 98, "
+                "TempC: 36.6 deg C, Rhythm: normal, BPText: 120 over 80 mmHg, "
+                "Lesion: -2 mm, WBC: 1,200 cells/µL"
+            )
+        },
+    )
+    vmap_str = {v.name: v for v in skeleton_str.vitals}
+
+    assert vmap_str["BP"].value == "128/82"
+    assert vmap_str["BP"].unit == "mm Hg"
+
+    assert vmap_str["Hgb"].value == "11.2"
+    assert vmap_str["Hgb"].unit == "g/dL"
+
+    assert vmap_str["Temp"].value == "98.6"
+    assert vmap_str["Temp"].unit == "°F"
+
+    assert vmap_str["HR"].value == "98"
+    assert vmap_str["HR"].unit == "unknown"
+
+    assert vmap_str["TempC"].value == "36.6"
+    assert vmap_str["TempC"].unit == "deg C"
+
+    assert vmap_str["Rhythm"].value == "normal"
+    assert vmap_str["Rhythm"].unit == "unknown"
+
+    assert vmap_str["BPText"].value == "120 over 80 mmHg"
+    assert vmap_str["BPText"].unit == "unknown"
+
+    assert vmap_str["Lesion"].value == "-2"
+    assert vmap_str["Lesion"].unit == "mm"
+
+    assert vmap_str["WBC"].value == "1,200"
+    assert vmap_str["WBC"].unit == "cells/µL"
+
+
+def test_vital_source_enum_and_gemini_output_schema():
+    """
+    Requirement:
+    - Remove PATIENT_REPORTED from VitalSource.
+    - VitalSource must only contain PATIENT_PROVIDED and DEVICE_PROVIDED.
+    - Gemini output schema only offers PATIENT_PROVIDED and DEVICE_PROVIDED for vitals.
+    """
+    from app.schemas.doctor_brief import VitalSource, GeminiDoctorBriefOutput
+
+    # Check VitalSource enum
+    assert set(VitalSource) == {VitalSource.PATIENT_PROVIDED, VitalSource.DEVICE_PROVIDED}
+    assert not hasattr(VitalSource, "PATIENT_REPORTED")
+
+    # Check GeminiDoctorBriefOutput JSON schema
+    schema = GeminiDoctorBriefOutput.model_json_schema()
+    defs = schema.get("$defs", {})
+    vital_source_def = defs.get("VitalSource")
+    if vital_source_def:
+        assert set(vital_source_def.get("enum", [])) == {"PATIENT_PROVIDED", "DEVICE_PROVIDED"}
+        assert "PATIENT_REPORTED" not in vital_source_def.get("enum", [])
+
+
 

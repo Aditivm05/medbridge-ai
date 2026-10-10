@@ -132,6 +132,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 ### Known Limitations
 1. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
 2. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
+3. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
 
 ### Technical Debt & Known Issues
 3. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.

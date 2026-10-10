@@ -1,8 +1,9 @@
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
 import uuid
+import re
 
 DISCLAIMER = (
     "CONFIDENTIAL MEDICAL BRIEF FOR CARE COORDINATION ONLY. "
@@ -26,7 +27,6 @@ class FactSource(str, Enum):
 class VitalSource(str, Enum):
     PATIENT_PROVIDED = "PATIENT_PROVIDED"
     DEVICE_PROVIDED = "DEVICE_PROVIDED"
-    PATIENT_REPORTED = "PATIENT_REPORTED"
 
 
 class ExtractionSource(str, Enum):
@@ -193,6 +193,34 @@ def _parse_metadata_sourced_facts(raw_val: Any, field_name: str) -> List[Sourced
     return facts
 
 
+def _split_vital_val_and_unit(raw_val: Any) -> Tuple[str, str]:
+    """
+    Takes the leading numeric part (including leading minus/plus, thousands commas,
+    '/' and decimals) as the value and the rest of the string, unchanged, as the unit.
+    If the text after the leading number contains a digit or is longer than 12 characters,
+    keeps the whole original string as the value and sets unit to 'unknown'.
+    If there is no rest, unit is 'unknown'. Non-numeric strings (e.g. 'normal') return (s, 'unknown').
+    Never guesses or converts units.
+    """
+    if raw_val is None:
+        return ("unknown", "unknown")
+    s = str(raw_val).strip()
+    if not s:
+        return ("unknown", "unknown")
+
+    match = re.match(r"^([-+]?[0-9][0-9.,/]*[0-9]|[-+]?[0-9])\s*(.*)$", s)
+    if match:
+        val = match.group(1).strip()
+        rest = match.group(2).strip()
+        if not rest:
+            return (val if val else "unknown", "unknown")
+        if any(c.isdigit() for c in rest) or len(rest) > 12:
+            return (s, "unknown")
+        return (val if val else "unknown", rest)
+
+    return (s, "unknown")
+
+
 def _parse_metadata_vitals(raw_vitals: Any) -> List[VitalFinding]:
     findings: List[VitalFinding] = []
     if not raw_vitals:
@@ -201,18 +229,13 @@ def _parse_metadata_vitals(raw_vitals: Any) -> List[VitalFinding]:
     if isinstance(raw_vitals, dict):
         for k, v in raw_vitals.items():
             name = str(k).strip()
-            val_str = str(v).strip()
-            unit_str = "unknown"
-            if " " in val_str:
-                parts = val_str.rsplit(" ", 1)
-                val_str = parts[0].strip()
-                unit_str = parts[1].strip()
+            val, unit = _split_vital_val_and_unit(v)
             findings.append(
                 VitalFinding(
                     name=name,
-                    value=val_str or "unknown",
-                    unit=unit_str or "unknown",
-                    source=VitalSource.PATIENT_REPORTED,
+                    value=val,
+                    unit=unit,
+                    source=VitalSource.PATIENT_PROVIDED,
                     reference="intake:vitals",
                 )
             )
@@ -223,35 +246,30 @@ def _parse_metadata_vitals(raw_vitals: Any) -> List[VitalFinding]:
             elif isinstance(item, str):
                 findings.extend(_parse_metadata_vitals(item))
     elif isinstance(raw_vitals, str):
-        chunks = [c.strip() for c in raw_vitals.replace(";", ",").split(",") if c.strip()]
+        # Split on semicolons, newlines, or commas that are delimiters (not thousands commas between digits)
+        chunks = [c.strip() for c in re.split(r"[;\n]|,\s+|(?<=\D),|,(?=\D)", raw_vitals) if c.strip()]
         for chunk in chunks:
             if ":" in chunk:
                 name_part, val_part = chunk.split(":", 1)
                 name = name_part.strip()
-                val_part = val_part.strip()
-                unit = "unknown"
-                if " " in val_part:
-                    p = val_part.rsplit(" ", 1)
-                    val = p[0].strip()
-                    unit = p[1].strip()
-                else:
-                    val = val_part
+                val, unit = _split_vital_val_and_unit(val_part)
                 findings.append(
                     VitalFinding(
                         name=name,
-                        value=val or "unknown",
-                        unit=unit or "unknown",
-                        source=VitalSource.PATIENT_REPORTED,
+                        value=val,
+                        unit=unit,
+                        source=VitalSource.PATIENT_PROVIDED,
                         reference="intake:vitals",
                     )
                 )
             else:
+                val, unit = _split_vital_val_and_unit(chunk)
                 findings.append(
                     VitalFinding(
                         name="vital",
-                        value=chunk.strip(),
-                        unit="unknown",
-                        source=VitalSource.PATIENT_REPORTED,
+                        value=val,
+                        unit=unit,
+                        source=VitalSource.PATIENT_PROVIDED,
                         reference="intake:vitals",
                     )
                 )
@@ -266,8 +284,9 @@ def create_blank_brief_skeleton(
 ) -> DoctorBrief:
     """
     Creates a DoctorBrief skeleton for manual entry upon generation failure.
-    Pre-fills the patient's own entered history, medications, allergies, and vitals
-    from case metadata, labelled PATIENT_REPORTED. Leaves everything else unknown.
+    Pre-fills the patient's own entered history, medications, allergies (labelled PATIENT_REPORTED)
+    and vitals (labelled PATIENT_PROVIDED with reference 'intake:vitals') from case metadata.
+    Leaves everything else unknown.
     """
     now = datetime.utcnow()
     meta = metadata or {}
