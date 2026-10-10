@@ -30,10 +30,8 @@ def init_firebase_admin():
 
     try:
         if not firebase_admin._apps:
-            # When using emulators or dev, a simple project ID credential suffices
-            cred = credentials.AnonymousCredentials() if settings.FIREBASE_AUTH_EMULATOR_HOST else None
+            # When using emulators or ADC, initializing with projectId is sufficient
             firebase_admin.initialize_app(
-                credential=cred,
                 options={"projectId": settings.FIREBASE_PROJECT_ID},
             )
         _firebase_initialized = True

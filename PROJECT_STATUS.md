@@ -9,7 +9,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
 - [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a Backend Validation, Phase 6b Frontend Upload UI & Phase 6c PDF Extraction Completed)*
+- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix real-emulator persistence, transactions, and Storage uploads marked UNVERIFIED pending manual check)*
 - [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
 
 ## 3. Files Created Across Phases 1 - 5
@@ -100,19 +100,23 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
 - **Phase 6c-Fix: Firestore Persistence & Real Transactions:**
+  - **Real-emulator persistence**: **UNVERIFIED** *(verified in automated in-memory fake test suite; pending user manual check against live running Firebase emulator)*.
+  - **Firestore transaction acceptance**: **UNVERIFIED** *(verified with `@firestore_transactional` and conflict tests in automated fake suite; pending user manual check against live running Firestore emulator)*.
+  - **Storage uploads**: **UNVERIFIED** *(streaming to Storage emulator bucket implemented; verified in automated fake suite; pending user manual check against live running Storage emulator)*.
   - Migrated `CaseService` and `DocumentService` to direct Firestore persistence (`cases`, `cases/{caseId}/documents`, `idempotency_keys`).
   - Idempotency keys now persist in Firestore, guaranteeing duplicate prevention survives backend restarts.
   - Converted case acceptance to real Firestore transactions (`@firestore_transactional`) with race condition detection and HTTP 409 conflict.
   - Uploaded files stream directly to the Storage emulator bucket (`medbridge-ai-documents`) with zero local disk copies. Added `data/` and `emulator-data/` to `.gitignore`.
   - Added fail-fast emulator connection checks in production mode (raises `FirestoreConnectionError` if emulator unreachable, no silent fallbacks).
-  - Test suite operates against a dedicated `FakeFirestoreClient` and `FakeStorageClient` for fast, offline, serverless execution.
+  - Test suite operates against a dedicated `FakeFirestoreClient` and `FakeStorageClient` for fast, offline, serverless execution (45/45 tests passing).
 - **Phase 6b Frontend Upload UI:**
   - `DocumentUploadScreen.tsx` updated with drag & drop file picker, client checks (PDF/JPG/PNG, max 10 MB, max 5 files), `XMLHttpRequest` real progress tracking, in-memory queue, status badges (`Selected`, `Uploading`, `Confirmed by server`, `Failed`), per-file retry mechanism, and error mapping.
   - `api.uploadDocument` implemented in `frontend/src/services/api.ts` with `xhr.upload.onprogress`.
 - **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
 
 ## 5. Next Steps
-- Await confirmation on Phase 6c-fix.
+- Await user manual check confirmation for real-emulator persistence, Firestore transaction acceptance, and Storage uploads.
+- Do NOT start Phase 6d yet.
 - Once confirmed, proceed to Phase 6d: signed-URL access (~5 minutes) with owner / assigned clinician / admin checks, `DOC_VIEWED` and denial audit events, emulator fallback documented, and tests for allowed and denied cases.
 - Do NOT start Phase 6e.
 
