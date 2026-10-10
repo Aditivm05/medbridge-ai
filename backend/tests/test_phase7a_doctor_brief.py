@@ -1126,19 +1126,20 @@ def test_vital_source_enum_and_gemini_output_schema():
     - VitalSource must only contain PATIENT_PROVIDED and DEVICE_PROVIDED.
     - Gemini output schema only offers PATIENT_PROVIDED and DEVICE_PROVIDED for vitals.
     """
-    from app.schemas.doctor_brief import VitalSource, GeminiDoctorBriefOutput
+    from app.schemas.doctor_brief import VitalSource, GeminiDoctorBriefOutput, VitalFinding
 
     # Check VitalSource enum
     assert set(VitalSource) == {VitalSource.PATIENT_PROVIDED, VitalSource.DEVICE_PROVIDED}
     assert not hasattr(VitalSource, "PATIENT_REPORTED")
 
-    # Check GeminiDoctorBriefOutput JSON schema
+    # Check VitalFinding model field annotation directly
+    assert VitalFinding.model_fields["source"].annotation == VitalSource
+
+    # Check GeminiDoctorBriefOutput JSON schema definition unconditionally
     schema = GeminiDoctorBriefOutput.model_json_schema()
-    defs = schema.get("$defs", {})
-    vital_source_def = defs.get("VitalSource")
-    if vital_source_def:
-        assert set(vital_source_def.get("enum", [])) == {"PATIENT_PROVIDED", "DEVICE_PROVIDED"}
-        assert "PATIENT_REPORTED" not in vital_source_def.get("enum", [])
+    vital_source_def = schema["$defs"]["VitalSource"]
+    assert set(vital_source_def["enum"]) == {"PATIENT_PROVIDED", "DEVICE_PROVIDED"}
+    assert "PATIENT_REPORTED" not in vital_source_def["enum"]
 
 
 
