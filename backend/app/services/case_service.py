@@ -1,5 +1,5 @@
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import uuid
 
@@ -303,6 +303,7 @@ class CaseService:
         actor_id: str,
         actor_role: str,
         reason: Optional[str] = None,
+        extra_details: Optional[Dict[str, Any]] = None,
     ) -> CaseResponse:
         """
         Central State Transition Engine persisting to Firestore.
@@ -344,25 +345,45 @@ class CaseService:
             }
             event_type = event_type_map.get(target_status, AuditEventType.CASE_UPDATED)
 
+            event_details = {
+                "from": case.status.value,
+                "to": target_status.value,
+                "reason": reason,
+                "version": updated_case.version,
+            }
+            if extra_details:
+                event_details.update(extra_details)
+
             audit_service.log_event(
                 event_type=event_type,
                 actor_id=actor_id,
                 actor_role=actor_role,
                 case_id=case_id,
-                details={
-                    "from": case.status.value,
-                    "to": target_status.value,
-                    "reason": reason,
-                    "version": updated_case.version,
-                },
+                details=event_details,
             )
+            return updated_case
+
+    def update_case_metadata(self, case_id: str, metadata: Dict[str, Any]) -> CaseResponse:
+        """Updates metadata on a case document in Firestore."""
+        with self._lock:
+            case = self.get_case(case_id)
+            current_meta = dict(case.metadata or {})
+            current_meta.update(metadata)
+            validate_case_metadata(current_meta)
+            updated_case = case.model_copy(
+                update={
+                    "metadata": current_meta,
+                    "updatedAt": datetime.utcnow(),
+                }
+            )
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))
             return updated_case
 
     def accept_case_atomic(self, case_id: str, clinician_id: str) -> CaseResponse:
         """
-        Concurrency-safe case acceptance using a real Firestore transaction:
-        Re-reads case inside the transaction, checks status == MATCHING and unassigned,
-        then sets clinician and ACCEPTED.
+        Concurrency-safe case acceptance using a Firestore transaction:
+        Re-reads case and clinician inside the transaction, checks status == MATCHING and unassigned,
+        checks clinician is verified and available, then sets both documents atomically.
         Any concurrent race collision raises CaseConflictError (HTTP 409).
         """
         @firestore_transactional(self.db)
@@ -392,6 +413,36 @@ class CaseService:
                     f"Status is '{current_status}' and assignedClinicianId is '{assigned}'."
                 )
 
+            # Check clinician availability inside transaction
+            clinician_ref = self.db.collection("clinicians").document(clinician_id)
+            clin_snapshot = clinician_ref.get(transaction=tx)
+            clin_data = clin_snapshot.to_dict() if clin_snapshot.exists else None
+
+            if clin_data:
+                c_status = clin_data.get("verificationStatus")
+                c_avail = clin_data.get("availability")
+                c_case = clin_data.get("currentCaseId")
+
+                if c_status != "verified":
+                    raise CaseConflictError(
+                        f"Clinician '{clinician_id}' cannot accept case: verification status is '{c_status}'."
+                    )
+                if c_avail != "available" or (c_case is not None and c_case != case_id):
+                    audit_service.log_event(
+                        event_type=AuditEventType.CONFLICT_DETECTED,
+                        actor_id=clinician_id,
+                        actor_role="clinician",
+                        case_id=case_id,
+                        details={
+                            "attemptedClinicianId": clinician_id,
+                            "clinicianAvailability": c_avail,
+                            "currentCaseId": c_case,
+                        },
+                    )
+                    raise CaseConflictError(
+                        f"Clinician '{clinician_id}' cannot accept case: availability is '{c_avail}'."
+                    )
+
             now = datetime.utcnow()
             new_version = data.get("version", 1) + 1
             updates = {
@@ -401,11 +452,34 @@ class CaseService:
                 "updatedAt": now.isoformat(),
                 "version": new_version,
             }
+
+            # Atomic updates for both clinician and case
+            if clin_data:
+                tx.update(clinician_ref, {
+                    "availability": "busy",
+                    "currentCaseId": case_id,
+                    "updatedAt": now.isoformat(),
+                })
             tx.update(case_ref, updates)
             merged = dict(data, **updates)
             return case_from_firestore_dict(case_id, merged)
 
-        updated_case = _tx_accept()
+        try:
+            updated_case = _tx_accept()
+        except (CaseConflictError, CaseNotFoundError):
+            raise
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "conflict" in err_msg or "aborted" in err_msg or "precondition" in err_msg:
+                audit_service.log_event(
+                    event_type=AuditEventType.CONFLICT_DETECTED,
+                    actor_id=clinician_id,
+                    actor_role="clinician",
+                    case_id=case_id,
+                    details={"attemptedClinicianId": clinician_id, "error": str(e)},
+                )
+                raise CaseConflictError(f"Concurrency collision accepting case '{case_id}': {e}")
+            raise
 
         audit_service.log_event(
             event_type=AuditEventType.CASE_ACCEPTED,
@@ -415,6 +489,7 @@ class CaseService:
             details={"assignedClinicianId": clinician_id, "version": updated_case.version},
         )
         return updated_case
+
 
     def increment_document_count(self, case_id: str) -> CaseResponse:
         """Atomically increments the document count on the case in Firestore."""

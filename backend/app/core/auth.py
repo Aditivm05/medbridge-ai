@@ -120,10 +120,10 @@ def verify_id_token(token: str) -> AuthenticatedUser:
             role = "admin"
             is_verified = False
         else:
-            # Fallback parse: e.g. mock-token-patient-customid
-            uid = clean_token.replace("mock-token-", "").replace("dev-token-", "")
-            role = "clinician" if "clinician" in uid else ("admin" if "admin" in uid else "patient")
-            is_verified = "verified" in uid and "unverified" not in uid
+            # Fallback parse: e.g. mock-token-patient-customid or mock-token-demo_doc_sharma
+            uid = clean_token.replace("mock-token-", "").replace("dev-token-", "").replace("test-token-", "")
+            role = "clinician" if ("clinician" in uid or "doc" in uid) else ("admin" if "admin" in uid else "patient")
+            is_verified = ("verified" in uid or ("doc" in uid and "pending" not in uid and "unverified" not in uid)) and "unverified" not in uid
 
         # Check if overridden in store
         stored = _custom_claims_store.get(uid, {})

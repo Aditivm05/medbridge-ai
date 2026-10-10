@@ -65,8 +65,80 @@ export const api = {
       body: JSON.stringify({}),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(`HTTP ${res.status}: ${err.detail}`);
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errDetail = err.detail;
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  },
+
+  getMatchingPool: async (): Promise<any[]> => {
+    const res = await authenticatedFetch('/clinicians/matching-pool');
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errDetail = err.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  declineCase: async (caseId: string, reason?: string) => {
+    const res = await authenticatedFetch(`/cases/${caseId}/decline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || 'Clinician unavailable or out of scope' }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errDetail = err.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  matchCase: async (caseId: string) => {
+    const res = await authenticatedFetch(`/cases/${caseId}/match`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errDetail = err.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  listClinicians: async () => {
+    const res = await authenticatedFetch('/clinicians');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  updateClinicianAvailability: async (clinicianId: string, availability: string) => {
+    const res = await authenticatedFetch(`/clinicians/${clinicianId}/availability`, {
+      method: 'PATCH',
+      body: JSON.stringify({ availability }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err.detail) errDetail = err.detail;
+      } catch {}
+      throw new Error(errDetail);
     }
     return res.json();
   },

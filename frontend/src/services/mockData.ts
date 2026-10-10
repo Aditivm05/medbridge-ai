@@ -34,6 +34,28 @@ export const mockClinicians: ClinicianData[] = [
     isDemo: true,
     currentCaseId: null,
   },
+  {
+    clinicianId: 'demo_doc_pending',
+    fullName: 'Dr. Vikram Malhotra [DEMO / SIMULATED]',
+    licenseNumber: 'DMC-SIM-PENDING-771',
+    specialty: 'general_medicine',
+    languages: ['en', 'hi'],
+    verificationStatus: 'pending',
+    availability: 'available',
+    isDemo: true,
+    currentCaseId: null,
+  },
+  {
+    clinicianId: 'demo_doc_offline',
+    fullName: 'Dr. Sneha Kulkarni [DEMO / SIMULATED]',
+    licenseNumber: 'MMC-SIM-99214',
+    specialty: 'cardiology',
+    languages: ['en', 'mr'],
+    verificationStatus: 'verified',
+    availability: 'offline',
+    isDemo: true,
+    currentCaseId: null,
+  },
 ];
 
 export const sampleSyntheticDocuments: Record<string, DocumentData> = {

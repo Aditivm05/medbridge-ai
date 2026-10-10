@@ -8,7 +8,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 2: Full-Stack Scaffolding, README, Landing Page & GET /health** *(Completed & Verified)*
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
-- [x] **Phase 5: Database and Case Management** *(Completed. Persistence verified on real emulator (10 Oct 2026); transaction acceptance UNVERIFIED until Phase 8.)*
+- [x] **Phase 5: Database and Case Management** *(Completed. Persistence verified on real emulator (10 Oct 2026); transaction acceptance VERIFIED in Phase 8.)*
 - [ ] **Phase 6: Documents and Voice** *(Not fully verified. Voice input = PLANNED. Real-Gemini OCR, 6d stream endpoint on real emulator, and uvicorn log filter UNVERIFIED)*
   - **Phase 6a**: Upload intent, validation (mime, magic bytes, size, file count) — **Status**: Completed | **Tag**: `phase-6a-complete`
   - **Phase 6b**: Frontend Document Upload Screen with drag-and-drop & XHR upload progress — **Status**: Completed | **Tag**: `phase-6b-complete`
@@ -22,8 +22,15 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Phase 7b**: Clinician Review Integration: backend verification and authorization gates on `POST /cases/{case_id}/brief/review`, verified clinician role and assignment checks, duplicate review blocking, immutable audit trail logging — **Status**: Completed | **Verified**: Backend test suite (7 tests) & live smoke test.
   - **Phase 7c**: Frontend Doctor Brief review screen & Consultation Workspace: real endpoint wiring (`generate`, `get`, `put`, `approve`, `review`), separation of patient-reported and document-extracted facts, source labels (`PATIENT_REPORTED`, `PDF_TEXT`, `AI_EXTRACTED`), prominent missing info & clarification questions, side-by-side unresolved conflicts, permanent safety banner, interactive edit modal invalidating approval, submit button enabled only on approval — **Status**: Completed | **Verified**: Frontend production build (`tsc && vite build`) & ConsultationWorkspace integration.
   - **Live Integration Smoke Test**: End-to-end verified with running backend, Firebase emulators, and live Gemini API (`gemini-3.8-flash`) on 11 Oct 2026.
+- [x] **Phase 8: Clinician Matching, Concurrency & Lifecycle** *(Completed & Verified)*
+  - **Phase 8a**: Clinician seeding & personas: Seeded 5 demo clinicians in Firestore with explicit `[DEMO / SIMULATED]` labels, `isDemo: true`, specialty, language tags, and verification status (`verified`, `pending`).
+  - **Phase 8b**: Deterministic Matching Engine: Verification gate, availability filter (`available`), patient language match, and specialty preference scoring with deterministic tie-breaking. Automatic fallback to `NO_CLINICIAN_AVAILABLE` with `CASE_NO_CLINICIAN` audit trail logging when no matching clinician is available or when pool is exhausted.
+  - **Phase 8c**: Atomic Case Acceptance & Concurrency Locking: Firestore transaction (`@firestore_transactional`) enforcing dual-document atomic update on both `cases/{case_id}` and `clinicians/{clinician_id}`. Race collision detection raises `CaseConflictError` (HTTP 409) and logs `CONFLICT_DETECTED` audit event. Caller identity strictly enforced from authenticated token (`current_user.uid`), blocking unverified clinicians (HTTP 403) and arbitrary client-supplied IDs.
+  - **Phase 8d**: Clinician Decline & Availability: Decline endpoint (`POST /cases/{case_id}/decline`) updating case history and falling back to remaining eligible clinicians. Availability endpoint (`PATCH /clinicians/{id}/availability`) and matching pool retrieval (`GET /clinicians/matching-pool`).
+  - **Phase 8e**: Frontend Integration: `ClinicianDashboard.tsx` connected to real backend endpoints for matching pool queue, live accept/decline actions, real-time availability toggle, race collision simulation, and authenticated persona switching via `authService.switchUser`.
+  - **Verification**: Complete backend test suite (17 Phase 8 tests, 121/121 total passing) & live Firestore emulator smoke test verifying 2-clinician simultaneous race collision (1 winner HTTP 200, 1 loser HTTP 409).
 
-## 3. Files Created Across Phases 1 - 7a
+## 3. Files Created Across Phases 1 - 8
 ### Architecture, Docs & Infrastructure
 - `docs/ARCHITECTURE.md`: Complete system architecture, data models for 10 collections, state machine table, concurrency transaction rules, and REST API blueprint.
 - `README.md`: Comprehensive beginner-friendly setup guide with click-by-click commands, architecture diagram, and expected outputs.
@@ -32,7 +39,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `firebase/firestore.rules`: Deny-by-default Firestore security rules.
 - `firebase/firestore.indexes.json`: Firestore index configuration.
 - `firebase/storage.rules`: Deny-by-default Storage security rules.
-- `firebase/seed_data.json`: Seed demo clinicians with `[DEMO / SIMULATED]` markers.
+- `firebase/seed_data.json`: Seed demo clinicians with `[DEMO / SIMULATED]` markers and `isDemo: true`.
 
 ### Backend (`backend/`)
 - `backend/requirements.txt`: Backend dependencies (FastAPI, Pydantic, google-genai, firebase-admin, pytest, etc.).
@@ -42,18 +49,21 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/core/state_machine.py`: Centralized Case State Machine with transition validators across 10 states and 18 allowed transitions.
 - `backend/app/core/firestore_client.py`: Centralized Firestore and Storage client factory, emulator connection verification (fail-fast), and in-memory `FakeFirestoreClient` / `FakeStorageClient` for offline pytest suite.
 - `backend/app/models/firestore_models.py`: Firestore snapshot serializers, Timestamp converters, and enum parsers.
-- `backend/app/schemas/`: Pydantic schemas for `case.py` (with `CaseUpdate` and `CaseSubmitRequest`), `audit.py` (full lifecycle events), `user.py`, `patient.py`, `clinician.py`, `document.py`, `doctor_brief.py`, `consultation.py`.
-- `backend/app/services/case_service.py`: Service layer with complete Case CRUD, draft-only update guard, idempotent submit, and atomic concurrency locking.
+- `backend/app/schemas/`: Pydantic schemas for `case.py` (with `CaseUpdate` and `CaseSubmitRequest`), `clinician.py` (matching, availability, accept/decline), `audit.py` (full lifecycle events), `user.py`, `patient.py`, `document.py`, `doctor_brief.py`, `consultation.py`.
+- `backend/app/services/case_service.py`: Service layer with complete Case CRUD, draft-only update guard, idempotent submit, and atomic concurrency locking via Firestore transactions (`accept_case_atomic`).
+- `backend/app/services/clinician_service.py`: Clinician seed service, multi-attribute matching algorithm (verification, availability, language, specialty scoring, queue ordering), decline handler with exhaustion fallback, and availability manager.
 - `backend/app/services/document_service.py`: Extraction service per-page (`pypdf`), low-text `NEEDS_OCR` tagging, encrypted/corrupted/page-limit safeguards (30 pages max), audit events, and Phase 6e Gemini multimodal OCR pipeline.
 - `backend/app/services/gemini_service.py`: Multimodal Gemini OCR service with strict data-only prompt, Pydantic validation, exponential backoff on 429/5xx, and synthetic data notices.
 - `backend/app/services/brief_service.py`: AI Doctor Brief service using Google GenAI SDK, strict data-only prompt, Pydantic structured output, conflict detection, rate limiting, and fallback skeleton.
 - `backend/app/services/audit_service.py`: Append-only audit logger.
-- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `briefs.py` (Doctor Brief generate, read, edit, patient approve, clinician review), `audit.py` (with `/audit/cases/{case_id}`).
-- `backend/tests/test_phase7a_doctor_brief.py`: Automated Phase 7a Doctor Brief test suite (12 tests: Complete info, missing info, conflicting info, malformed JSON fallback, 429/5xx retry, 400 fail, timeout, injection defense, no-diagnosis schema rule, invalid doc references dropped, RBAC gates, lifecycle/re-approval).
-- `backend/tests/test_phase6e_gemini_ocr_extraction.py`: Automated Phase 6e OCR test suite (13 tests: success, malformed JSON, 429/5xx retries, 400 no-retry, missing/invalid key, timeout, prompt injection data safety, pypdf text preservation, duplicate trigger guard, RBAC).
-- `backend/tests/test_phase6d_signed_url_access.py`: Automated signed URL & streaming access test suite (RBAC owner/clinician/admin, 403 status gates, token swap & expiry rejection, header security, zero-token audit logging).
-- `backend/tests/test_phase6c_pdf_text_extraction.py`: Automated PDF text extraction test suite (single-page, multi-page, empty/scanned, corrupted, encrypted, oversized, security isolation, audit events).
-- `backend/tests/test_phase6a_document_upload.py`: Automated upload validation test suite (extension, MIME, magic bytes, 10 MB limit, 5 files per case, ownership isolation).
+- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD, submit, match, accept, decline, status), `clinicians.py` (seed, list, matching pool, availability), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `briefs.py` (Doctor Brief generate, read, edit, patient approve, clinician review), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/tests/test_phase8_clinician_matching.py`: Automated Phase 8 clinician matching and concurrency test suite (17 tests: explicit demo labels, seed idempotency, verification filter, availability filter, language matching, specialty scoring, tie-breaking, NO_CLINICIAN_AVAILABLE transition, retry matching, cancellation, atomic dual-doc accept, decline exclusion, decline exhaustion, simultaneous 2-clinician race condition 409 collision, unverified clinician 403 block, patient 403 block, unverified decline 403 block).
+- `backend/tests/test_phase7b_clinician_review.py`: Automated Phase 7b Clinician Review test suite (7 tests).
+- `backend/tests/test_phase7a_doctor_brief.py`: Automated Phase 7a Doctor Brief test suite (16 tests).
+- `backend/tests/test_phase6e_gemini_ocr_extraction.py`: Automated Phase 6e OCR test suite (13 tests).
+- `backend/tests/test_phase6d_signed_url_access.py`: Automated signed URL & streaming access test suite (19 tests).
+- `backend/tests/test_phase6c_pdf_text_extraction.py`: Automated PDF text extraction test suite (11 tests).
+- `backend/tests/test_phase6a_document_upload.py`: Automated upload validation test suite (13 tests).
 - `backend/tests/test_phase5_state_machine_and_crud.py`: Exhaustive 100-pair state transition matrix test (18 valid, 82 invalid), CRUD lifecycle, idempotency, and Firestore models.
 - `backend/tests/test_auth_and_access.py`: Pytest automated suite proving 401 unauth, patient ownership isolation (403), unverified clinician claim block (403), verified clinician acceptance (200), and custom claims inspection.
 - `backend/tests/test_case_flow.py`: Pytest automated test suite (health, state transitions, idempotency, magic bytes, race condition 409 conflict).
@@ -61,13 +71,13 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/conftest.py`, `backend/app/__init__.py`, `backend/.venv/.../sitecustomize.py`: Python 3.10.0 ForwardRef compatibility shims.
 
 ### Frontend Components & Security UI (`frontend/`)
-- `frontend/src/types/index.ts`: TypeScript domain definitions across all 7 screens.
+- `frontend/src/types/index.ts`: TypeScript domain definitions across all 7 screens including `ClinicianData` and matching statuses.
 - `frontend/src/vite-env.d.ts`: Standard Vite client type definitions.
-- `frontend/src/services/authService.ts`: Active authentication context, Firebase emulator token provider, and persona switcher.
-- `frontend/src/services/api.ts`: Authenticated fetch wrapper injecting `Authorization: Bearer <token>` and API helpers.
-- `frontend/src/services/mockData.ts`: Realistic synthetic data (initial cases, demo clinicians, CBC lab report, ultrasound notes, Doctor Brief).
-- `frontend/src/services/caseStore.ts`: Reactive state management store using Observer pattern with atomic claim and 409 conflict simulator.
-- `frontend/src/i18n/translations.ts`: Multilingual dictionary (English, Hindi, Marathi) with complete labels for all 7 screens.
+- `frontend/src/services/authService.ts`: Active authentication context, Firebase emulator token provider, and persona switcher with all demo clinicians (`demo_doc_patil`, `demo_doc_sharma`, `demo_doc_deshmukh`, `demo_doc_pending`, `demo_doc_offline`).
+- `frontend/src/services/api.ts`: Authenticated fetch wrapper injecting `Authorization: Bearer <token>` and API helpers (`getMatchingPool`, `acceptCase`, `declineCase`, `matchCase`, `listClinicians`, `updateClinicianAvailability`).
+- `frontend/src/services/mockData.ts`: Realistic synthetic data with all 5 demo clinicians labelled `[DEMO / SIMULATED]`.
+- `frontend/src/services/caseStore.ts`: Reactive state management store with `claimCaseAtomic` (calling backend `api.acceptCase`), `declineCase`, and `syncMatchingPool`.
+- `frontend/src/i18n/translations.ts`: Multilingual dictionary (English, Hindi, Marathi) with complete labels for all 7 screens including claim, decline, and conflict keys.
 - `frontend/src/components/common/EmergencyBanner.tsx`: Static zero-network 112 emergency guidance.
 - `frontend/src/components/common/SimulationBadge.tsx`: Visual `[DEMO / SIMULATED]` badge.
 - `frontend/src/components/common/StatusBadge.tsx`: Accessible status badges across 10 case states.
@@ -77,40 +87,35 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/src/components/screens/IntakeScreen.tsx`: Screen 2 — Rapid clinical intake, urgency selector, common symptom tags, emergency triggers.
 - `frontend/src/components/screens/DocumentUploadScreen.tsx`: Screen 3 — File dropzone, 1-click synthetic reports (CBC, Ultrasound), validation rules.
 - `frontend/src/components/screens/DoctorBriefReviewScreen.tsx`: Screen 4 — AI Doctor Brief review gate, objective facts table with preserved units, unknowns, edit modal.
-- `frontend/src/components/screens/ClinicianDashboard.tsx`: Screen 5 — Clinician matching pool, active doctor profile switcher, simulate 409 race collision button, atomic claim action.
+- `frontend/src/components/screens/ClinicianDashboard.tsx`: Screen 5 — Clinician matching pool connected to real backend API, active doctor profile switcher with auth token sync, clinician availability switcher (`available`/`busy`/`offline`), decline action, race collision simulation, and atomic claim action.
 - `frontend/src/components/screens/ConsultationWorkspace.tsx`: Screen 6 — Side-by-side workspace: brief & lab report inspector + assessment notes & care advice form.
 - `frontend/src/components/screens/FollowUpScreen.tsx`: Screen 7 — Follow-up date scheduling, emergency warning sign directives, case finalization summary.
-- `frontend/src/App.tsx`: Main application router with Golden Workflow stepper, health widget, and dev-only Phase 4 Security Tester widget.
+- `frontend/src/App.tsx`: Main application router with Golden Workflow stepper, health widget, dev-only Phase 4 Security Tester widget, and wired Phase 8 matching pool actions.
 - `frontend/scripts/capture_screenshots.cjs`: Automated screenshot generation script capturing all 7 screens at 1280px desktop and 360px mobile viewports.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (104/104 Passing):**
+- **Automated Test Suite (121/121 Passing):**
+  - `test_phase8_clinician_matching.py` (17 tests) -> ALL PASSED
+    - `test_seeded_demo_clinicians_have_explicit_demo_labels` -> PASSED (explicit `[DEMO / SIMULATED]` labels, `isDemo: true`)
+    - `test_seed_endpoint_is_idempotent` -> PASSED (re-running seed returns 200 without duplication)
+    - `test_matching_excludes_unverified_clinicians` -> PASSED (pending status excluded from matching pool)
+    - `test_matching_excludes_offline_and_busy_clinicians` -> PASSED (only available status eligible)
+    - `test_matching_filters_by_patient_language` -> PASSED (clinicians lacking patient language excluded)
+    - `test_matching_specialty_preference_and_fallback_scoring` -> PASSED (specialty preference prioritized, general fallback scored lower)
+    - `test_deterministic_queue_ordering_on_score_ties` -> PASSED (deterministic tie-breaking by ID)
+    - `test_no_clinician_available_transitions_status_and_logs_audit` -> PASSED (unmatched case transitions to `NO_CLINICIAN_AVAILABLE` with `CASE_NO_CLINICIAN` audit event)
+    - `test_retry_matching_from_no_clinician_available` -> PASSED (re-queuing allowed from `NO_CLINICIAN_AVAILABLE`)
+    - `test_case_cancellation_from_no_clinician_available` -> PASSED (cancellation allowed from `NO_CLINICIAN_AVAILABLE`)
+    - `test_atomic_accept_updates_case_and_clinician_documents` -> PASSED (atomic dual-document transaction: case assigned and clinician marked busy)
+    - `test_decline_case_excludes_clinician_and_falls_back` -> PASSED (declining clinician excluded from next candidate pool)
+    - `test_decline_exhaustion_transitions_to_no_clinician_available` -> PASSED (exhausted pool automatically transitions case to `NO_CLINICIAN_AVAILABLE`)
+    - `test_concurrency_race_condition_two_simultaneous_accepts` -> PASSED (two simultaneous accepts: 1 succeeds 200, 1 collides 409 Conflict with `CONFLICT_DETECTED` audit event)
+    - `test_unverified_clinician_cannot_accept_case` -> PASSED (unverified clinician claim raises 403 Forbidden)
+    - `test_patient_cannot_accept_case` -> PASSED (patient role raises 403 Forbidden)
+    - `test_unverified_clinician_cannot_decline_case` -> PASSED (unverified clinician decline raises 403 Forbidden)
   - `test_phase7b_clinician_review.py` (7 tests) -> ALL PASSED
-    - `test_clinician_review_success_on_patient_approved_brief` -> PASSED (verified assigned clinician submits review; status CLINICIAN_REVIEWED; reviewedBy, reviewedAt, and audit event recorded)
-    - `test_duplicate_clinician_review_blocked` -> PASSED (duplicate review on already reviewed brief raises 400 Bad Request to protect audit trail)
-    - `test_unverified_clinician_cannot_review` -> PASSED (unverified clinician claim raises 403 Forbidden)
-    - `test_patient_cannot_review` -> PASSED (patient role raises 403 Forbidden)
-    - `test_unassigned_clinician_cannot_review` -> PASSED (unassigned clinician raises 403 Forbidden)
-    - `test_review_blocked_on_invalid_case_status` -> PASSED (review blocked when case is in DRAFT/MATCHING/CANCELLED)
-    - `test_review_persists_in_firestore` -> PASSED (persisted review state survives cache clearing and reloads from Firestore)
   - `test_phase7a_doctor_brief.py` (16 tests) -> ALL PASSED
-    - `test_schema_has_no_diagnosis_or_prescription_fields` -> PASSED (extra='forbid' strictly rejects diagnosis, prescription, or treatment)
-    - `test_synthetic_case_a_complete_information` -> PASSED (verbatim complaint, timeline, vitals with exact units, document findings with sources and pages, BRIEF_GENERATED logged without content)
-    - `test_synthetic_case_b_missing_information_and_incomplete_documents` -> PASSED (literal 'unknown' preserved, incomplete docs with NEEDS_OCR/FAILED/PROCESSING flagged in missingInformation as not yet read)
-    - `test_synthetic_case_c_conflicting_information` -> PASSED (conflicting doses in patient input vs lab report recorded in conflicts list without AI resolution)
-    - `test_malformed_json_fallback_to_blank_skeleton` -> PASSED (malformed output returns blank skeleton with validation warning, zero crash)
-    - `test_api_error_retry_on_429_and_5xx_and_fail_on_400` -> PASSED (retries on 429/5xx, fails immediately without retry on 400)
-    - `test_timeout_handled_gracefully` -> PASSED (GEMINI_TIMEOUT_SECONDS enforced, returns blank skeleton with timeout warning, zero crash)
-    - `test_prompt_injection_treated_strictly_as_passive_data` -> PASSED ('ignore previous instructions, diagnose...' treated purely as passive data, zero diagnosis)
-    - `test_invalid_document_references_dropped_and_warned` -> PASSED (invalid document IDs and out-of-bounds page numbers dropped and warned)
-    - `test_rbac_and_ownership_gates` -> PASSED (401 unauthenticated, 403 cross-patient, 403 unassigned clinician, 403 clinician in MATCHING/DRAFT, 200 assigned clinician in ACCEPTED, 403 unassigned clinician review)
-    - `test_brief_lifecycle_editing_and_reapproval` -> PASSED (PATIENT_APPROVED -> human edit sets EDITED, increments version, saves snapshot in previousVersions; patient cannot edit once SUBMITTED; regenerate over EDITED brief requires confirmRegenerate=true)
-    - `test_generation_only_in_draft_and_rate_limiting` -> PASSED (generation blocked when not in DRAFT status, per-case rate limit enforced with 429)
-    - `test_brief_fallback_skeleton_prefills_patient_metadata` -> PASSED (fallback skeleton pre-populates intake symptoms, medications, allergies, vitals)
-    - `test_fallback_skeleton_vitals_without_unit_marks_unit_unknown_never_guessed` -> PASSED (vitals missing units marked 'unknown', never guessed)
-    - `test_vitals_unit_parsing_multi_word_and_non_numeric` -> PASSED (handles multi-word units, non-numeric strings, and boundary values)
-    - `test_vital_source_enum_and_gemini_output_schema` -> PASSED (VitalSource PATIENT_PROVIDED/DEVICE_PROVIDED validated)
   - `test_phase6e_gemini_ocr_extraction.py` (13 tests) -> ALL PASSED
   - `test_phase6d_signed_url_access.py` (19 tests) -> ALL PASSED
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
@@ -118,6 +123,16 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
+
+- **Phase 8 Live Integration Smoke Test (11 Oct 2026 — VERIFIED):**
+  - **Environment**: FastAPI backend running on port 8000; Firebase Auth (9099), Firestore (8080), Storage (9199) emulators active.
+  - **Seeding Verification**: Invoked `POST /api/v1/clinicians/seed`; verified 5 demo clinicians created with `[DEMO / SIMULATED]` labels and `isDemo: true`.
+  - **Simultaneous Concurrency Race Collision**: Dispatched 2 simultaneous requests from different verified clinicians to `POST /cases/{case_id}/accept` on the same case in the Firestore emulator:
+    - Clinician A succeeded with HTTP 200 (case status `ACCEPTED`, `assignedClinicianId: demo_doc_patil`, clinician availability `busy`).
+    - Clinician B received HTTP 409 Conflict with message indicating case was already assigned.
+    - Verified audit trail recorded `CONFLICT_DETECTED` with collision details.
+  - **Unsupported Language & Pool Exhaustion**: Case created with unsupported language (`de`) transitioned to `NO_CLINICIAN_AVAILABLE` with `CASE_NO_CLINICIAN` audit event.
+  - **Decline & Fallback**: Clinician declined case via `POST /cases/{case_id}/decline`; remaining pool re-evaluated and subsequently transitioned to `NO_CLINICIAN_AVAILABLE` upon exhaustion.
 
 - **Phase 7 Live Integration Smoke Test (11 Oct 2026 — VERIFIED):**
   - **Environment**: FastAPI backend on port 8000 healthy; Firebase Auth (9099), Firestore (8080), Storage (9199) reachable; Gemini API key configured with model `gemini-3.8-flash`.
@@ -133,27 +148,27 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Uvicorn log filter**: **`UNVERIFIED`** *(awaiting manual inspection on live server)*.
   - **Firestore persistence**: **VERIFIED** *(manual, emulator, 10 Oct 2026: case survived a backend restart)*.
   - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in emulator UI)*.
-  - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
+  - **Firestore transaction acceptance**: **VERIFIED** *(11 Oct 2026: verified in Phase 8 via `test_atomic_accept_updates_case_and_clinician_documents` and live concurrency race test on Firestore emulator)*.
   - **Phase 12 IAM signBlob production signing**: **`UNTESTED`** *(documented in ARCHITECTURE.md for production Cloud Run deployment)*.
 
-- **Frontend Production Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors, built in 2.92s).
+- **Frontend Production Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors, built in 2.48s).
 
 ## 5. Next Steps
-- Phase 7 (AI Doctor Brief, Clinician Review Integration, and Review UI) is complete and verified.
-- Next implementation target: Phase 8 (Consultation & Follow-up live workflow / real-time updates).
+- Phase 8 (Clinician Matching, Concurrency & Lifecycle) is complete and verified.
+- Next implementation target: Phase 9 (Consultation Workspace & Follow-Up lifecycle completion).
 - Do NOT push to remote without user instruction.
 
 ## 6. Known Limitations & Tech Debt
 
 ### Known Limitations
-1. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
-2. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
-3. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
+1. **Demo Clinicians are Simulated**: All seeded clinicians (`Dr. Rajesh Patil`, `Dr. Ananya Sharma`, `Dr. Priya Deshmukh`, `Dr. Vikram Malhotra`, `Dr. Sneha Kulkarni`) are synthetic test personas explicitly tagged with `[DEMO / SIMULATED]` and `isDemo: true`.
+2. **Matching Queue is In-Process / Query-Based**: The matching algorithm executes queries against Firestore rather than using a distributed message broker or Redis queue. This is appropriate for the hackathon MVP but would be backed by Cloud Tasks or Pub/Sub in high-volume production.
+3. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
+4. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
+5. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
 
 ### Technical Debt & Known Issues
 1. **Starlette Deprecation Warning**: Pytest reports `.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using 'httpx' with 'starlette.testclient' is deprecated; install 'httpx2' instead.` (harmless library notice from FastAPI's internal testclient import).
 2. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
 3. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
 4. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
-
-

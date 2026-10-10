@@ -67,6 +67,13 @@ async def lifespan(app: FastAPI):
     # 2. Startup: Ensure storage bucket exists on emulator if emulator host is set
     ensure_emulator_storage_bucket()
 
+    # 3. Startup: Seed demo clinicians into Firestore
+    try:
+        from app.services.clinician_service import clinician_service
+        clinician_service.seed_default_clinicians()
+    except Exception as e:
+        logger.warning(f"Could not seed demo clinicians during startup: {e}")
+
     yield
 
 

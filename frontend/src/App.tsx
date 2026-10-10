@@ -66,6 +66,8 @@ export function App() {
     generateDoctorBrief,
     patientReviewBrief,
     claimCaseAtomic,
+    declineCase,
+    syncMatchingPool,
     recordConsultationNotes,
     completeCaseAndFollowUp,
     resetToSyntheticDefaults,
@@ -363,15 +365,22 @@ export function App() {
           <ClinicianDashboard
             cases={cases}
             language={language}
-            onClaimCase={(caseId, clinicianId, simulateConflict) => {
-              const result = claimCaseAtomic(caseId, clinicianId, simulateConflict);
+            onClaimCase={async (caseId, clinicianId, simulateConflict) => {
+              const result = await claimCaseAtomic(caseId, clinicianId, simulateConflict);
               if (result.success) {
                 navigateTo('consultation', caseId);
               }
+              return result;
+            }}
+            onDeclineCase={async (caseId, reason) => {
+              return await declineCase(caseId, reason);
             }}
             onOpenConsultation={(caseItem) => {
               setActiveCaseId(caseItem.caseId);
               navigateTo('consultation', caseItem.caseId);
+            }}
+            onRefreshPool={async () => {
+              await syncMatchingPool();
             }}
           />
         )}

@@ -11,6 +11,13 @@ ALLOWED_CASE_METADATA_KEYS = frozenset({
     "medications",
     "allergies",
     "vitals",
+    "preferredSpecialty",
+    "requestedSpecialty",
+    "matchedClinicianIds",
+    "declinedClinicianIds",
+    "matchingAttemptedAt",
+    "lastDeclinedBy",
+    "lastDeclineReason",
 })
 MAX_METADATA_TOTAL_BYTES = 10 * 1024  # 10 KB
 MAX_METADATA_STR_FIELD_LEN = 2000

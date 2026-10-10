@@ -153,3 +153,34 @@ def doctor_brief_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
             doc_data[date_field] = firestore_timestamp_to_datetime(doc_data[date_field])
     return DoctorBrief.model_validate(doc_data)
 
+
+def clinician_to_firestore_dict(clinician: Any) -> Dict[str, Any]:
+    """Serializes a ClinicianProfile model to a Firestore-compatible document dictionary."""
+    data = clinician.model_dump(mode="json")
+    if hasattr(clinician.specialty, "value"):
+        data["specialty"] = clinician.specialty.value
+    if hasattr(clinician.verificationStatus, "value"):
+        data["verificationStatus"] = clinician.verificationStatus.value
+    if hasattr(clinician.availability, "value"):
+        data["availability"] = clinician.availability.value
+    if data.get("createdAt") and isinstance(data["createdAt"], datetime):
+        data["createdAt"] = data["createdAt"].isoformat()
+    return data
+
+
+def clinician_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
+    """Deserializes a Firestore document dictionary into a ClinicianProfile model."""
+    from app.schemas.clinician import ClinicianProfile, ClinicianSpecialty, ClinicianAvailability, ClinicianVerificationStatus
+    doc_data = dict(data)
+    doc_data["clinicianId"] = doc_id
+    if "specialty" in doc_data and isinstance(doc_data["specialty"], str):
+        doc_data["specialty"] = ClinicianSpecialty(doc_data["specialty"])
+    if "verificationStatus" in doc_data and isinstance(doc_data["verificationStatus"], str):
+        doc_data["verificationStatus"] = ClinicianVerificationStatus(doc_data["verificationStatus"])
+    if "availability" in doc_data and isinstance(doc_data["availability"], str):
+        doc_data["availability"] = ClinicianAvailability(doc_data["availability"])
+    if "createdAt" in doc_data and doc_data["createdAt"]:
+        doc_data["createdAt"] = firestore_timestamp_to_datetime(doc_data["createdAt"])
+    if not doc_data.get("createdAt"):
+        doc_data["createdAt"] = datetime.utcnow()
+    return ClinicianProfile.model_validate(doc_data)

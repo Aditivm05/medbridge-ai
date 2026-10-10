@@ -38,3 +38,31 @@ class ClinicianProfile(BaseModel):
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ClinicianAvailabilityUpdateRequest(BaseModel):
+    availability: ClinicianAvailability
+    currentCaseId: Optional[str] = None
+
+
+class CaseDeclineRequest(BaseModel):
+    reason: Optional[str] = Field(default="Clinician unavailable or out of scope")
+
+
+class ClinicianMatchItem(BaseModel):
+    clinicianId: str
+    fullName: str
+    licenseNumber: str
+    specialty: ClinicianSpecialty
+    languages: List[str]
+    matchScore: int
+    isExactSpecialtyMatch: bool
+    availability: ClinicianAvailability = ClinicianAvailability.AVAILABLE
+    isDemo: bool = True
+
+
+class ClinicianMatchResponse(BaseModel):
+    caseId: str
+    status: str
+    matches: List[ClinicianMatchItem]
+    matchedCount: int

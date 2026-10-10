@@ -9,6 +9,8 @@ from app.schemas.case import (
     CaseAcceptRequest,
 )
 from app.core.state_machine import CaseStatus, InvalidStateTransitionError
+from app.schemas.clinician import ClinicianMatchResponse, CaseDeclineRequest
+from app.services.clinician_service import clinician_service
 from app.services.case_service import (
     case_service,
     CaseConflictError,
@@ -194,7 +196,10 @@ def enqueue_for_matching(
     case_id: str,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Patient approves brief and enqueues into clinician matching pool."""
+    """
+    Patient approves brief and enqueues into clinician matching pool.
+    Transitions case to MATCHING status.
+    """
     try:
         case = case_service.get_case(case_id)
         check_case_ownership(case.patientId, current_user)
@@ -202,6 +207,32 @@ def enqueue_for_matching(
         return case_service.transition_status(
             case_id=case_id,
             target_status=CaseStatus.MATCHING,
+            actor_id=current_user.uid,
+            actor_role=current_user.role,
+        )
+    except CaseNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except InvalidStateTransitionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/{case_id}/match", response_model=ClinicianMatchResponse)
+def match_case(
+    case_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Triggers or queries matching algorithm for a case.
+    Filters by verification, availability, specialty, language, and queue order.
+    If no clinician is available, transitions to NO_CLINICIAN_AVAILABLE.
+    """
+    try:
+        case = case_service.get_case(case_id)
+        if current_user.role == "patient":
+            check_case_ownership(case.patientId, current_user)
+
+        return clinician_service.trigger_matching(
+            case_id=case_id,
             actor_id=current_user.uid,
             actor_role=current_user.role,
         )
@@ -233,6 +264,35 @@ def accept_case(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
+
+
+@router.post("/{case_id}/decline", response_model=CaseResponse)
+def decline_case(
+    case_id: str,
+    req: Optional[CaseDeclineRequest] = None,
+    current_user: AuthenticatedUser = Depends(require_verified_clinician),
+):
+    """
+    Clinician declines case.
+    Re-evaluates remaining available clinicians.
+    If pool is exhausted, automatically transitions case to NO_CLINICIAN_AVAILABLE.
+    """
+    try:
+        reason = req.reason if req else "Clinician declined case"
+        return clinician_service.decline_case(
+            case_id=case_id,
+            clinician_id=current_user.uid,
+            reason=reason,
+            actor_id=current_user.uid,
+            actor_role=current_user.role,
+        )
+    except CaseNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except InvalidStateTransitionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
 
 
 @router.post("/{case_id}/status", response_model=CaseResponse)

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CaseData, DoctorBriefData, DocumentData, FollowUpData, ScreenView } from '../types';
 import { initialMockCases, mockClinicians, sampleDoctorBrief } from './mockData';
+import { api } from './api';
 
 class CaseStore {
   private cases: CaseData[] = [...initialMockCases];
@@ -168,40 +169,169 @@ class CaseStore {
     this.notify();
   }
 
-  public claimCaseAtomic(
+  public async claimCaseAtomic(
     caseId: string,
     clinicianId: string,
     simulateConflict: boolean = false
-  ): { success: boolean; error?: string } {
-    const targetCase = this.cases.find((c) => c.caseId === caseId);
-    if (!targetCase) return { success: false, error: 'Case not found' };
-
-    if (simulateConflict || targetCase.status !== 'MATCHING' || targetCase.assignedClinicianId) {
+  ): Promise<{ success: boolean; error?: string }> {
+    if (simulateConflict) {
       return {
         success: false,
-        error: `HTTP 409 Conflict: Case '${caseId}' has already been claimed by another clinician. Matching queue updated.`,
+        error: `HTTP 409 Conflict: Case '${caseId}' concurrency collision detected. Another clinician accepted simultaneously.`,
       };
     }
 
-    const clinician = mockClinicians.find((doc) => doc.clinicianId === clinicianId) || mockClinicians[0];
-    const now = new Date().toISOString();
+    try {
+      const serverCase = await api.acceptCase(caseId);
+      const clinician = mockClinicians.find((doc) => doc.clinicianId === clinicianId) || mockClinicians[0];
+      const now = new Date().toISOString();
 
-    this.cases = this.cases.map((c) => {
-      if (c.caseId === caseId) {
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'ACCEPTED',
+            assignedClinicianId: serverCase.assignedClinicianId || clinician.clinicianId,
+            assignedClinicianName: clinician.fullName,
+            acceptedAt: serverCase.acceptedAt || now,
+            updatedAt: serverCase.updatedAt || now,
+          };
+        }
+        return c;
+      });
+
+      this.notify();
+      return { success: true };
+    } catch (err: any) {
+      if (err.status === 409 || err.message?.includes('409') || err.message?.includes('Conflict')) {
         return {
-          ...c,
-          status: 'ACCEPTED',
-          assignedClinicianId: clinician.clinicianId,
-          assignedClinicianName: clinician.fullName,
-          acceptedAt: now,
-          updatedAt: now,
+          success: false,
+          error: `HTTP 409 Conflict: ${err.message}`,
         };
       }
-      return c;
-    });
+      if (err.status === 403 || err.message?.includes('403') || err.message?.includes('Forbidden')) {
+        return {
+          success: false,
+          error: `HTTP 403 Forbidden: ${err.message || 'Clinician verification required to accept cases.'}`,
+        };
+      }
 
-    this.notify();
-    return { success: true };
+      // Local fallback if offline/mock mode
+      const targetCase = this.cases.find((c) => c.caseId === caseId);
+      if (!targetCase || targetCase.status !== 'MATCHING' || targetCase.assignedClinicianId) {
+        return {
+          success: false,
+          error: `HTTP 409 Conflict: Case '${caseId}' has already been claimed by another clinician. Matching queue updated.`,
+        };
+      }
+
+      const clinician = mockClinicians.find((doc) => doc.clinicianId === clinicianId) || mockClinicians[0];
+      const now = new Date().toISOString();
+
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'ACCEPTED',
+            assignedClinicianId: clinician.clinicianId,
+            assignedClinicianName: clinician.fullName,
+            acceptedAt: now,
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
+
+      this.notify();
+      return { success: true };
+    }
+  }
+
+  public async declineCase(
+    caseId: string,
+    reason?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const updatedCase = await api.declineCase(caseId, reason);
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: updatedCase.status as any,
+            updatedAt: updatedCase.updatedAt || new Date().toISOString(),
+          };
+        }
+        return c;
+      });
+      this.notify();
+      return { success: true };
+    } catch {
+      // Local fallback
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'NO_CLINICIAN_AVAILABLE',
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return c;
+      });
+      this.notify();
+      return { success: true };
+    }
+  }
+
+  public async syncMatchingPool(): Promise<void> {
+    try {
+      const serverPool = await api.getMatchingPool();
+      if (Array.isArray(serverPool)) {
+        const existingIds = new Set(this.cases.map((c) => c.caseId));
+        const newCases: CaseData[] = [];
+
+        for (const sc of serverPool) {
+          if (!existingIds.has(sc.caseId)) {
+            newCases.push({
+              caseId: sc.caseId,
+              patientId: sc.patientId,
+              assignedClinicianId: sc.assignedClinicianId || null,
+              assignedClinicianName: sc.assignedClinicianName || null,
+              requestedUrgency: sc.requestedUrgency || 'urgent',
+              status: sc.status,
+              idempotencyKey: sc.idempotencyKey || `idem_${sc.caseId}`,
+              chiefComplaint: sc.chiefComplaint || 'Urgent coordination case',
+              duration: sc.duration || '24 hours',
+              patientLanguage: sc.patientLanguage || 'en',
+              documentCount: sc.documentCount || 0,
+              doctorBriefId: sc.doctorBriefId || null,
+              doctorBrief: null,
+              documents: [],
+              consultationId: null,
+              consultation: null,
+              followUp: null,
+              createdAt: sc.createdAt || new Date().toISOString(),
+              updatedAt: sc.updatedAt || new Date().toISOString(),
+            });
+          }
+        }
+
+        this.cases = [
+          ...newCases,
+          ...this.cases.map((c) => {
+            const match = serverPool.find((sc) => sc.caseId === c.caseId);
+            if (match) {
+              return {
+                ...c,
+                status: match.status,
+                assignedClinicianId: match.assignedClinicianId,
+              };
+            }
+            return c;
+          }),
+        ];
+        this.notify();
+      }
+    } catch {}
   }
 
   public recordConsultationNotes(
@@ -304,6 +434,8 @@ export function useCaseStore() {
       caseStore.patientReviewBrief(caseId, approve, corrections),
     claimCaseAtomic: (caseId: string, clinicianId: string, simulateConflict?: boolean) =>
       caseStore.claimCaseAtomic(caseId, clinicianId, simulateConflict),
+    declineCase: (caseId: string, reason?: string) => caseStore.declineCase(caseId, reason),
+    syncMatchingPool: () => caseStore.syncMatchingPool(),
     recordConsultationNotes: (caseId: string, notes: string, careAdvice: string) =>
       caseStore.recordConsultationNotes(caseId, notes, careAdvice),
     completeCaseAndFollowUp: (caseId: string, followUp: any) =>
