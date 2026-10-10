@@ -100,9 +100,9 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
 - **Phase 6c-Fix: Firestore Persistence & Storage Uploads:**
-  - **Real-emulator persistence**: **VERIFIED** *(manual, emulator, 2026-10-10: case creation and document retrieval verified)*.
-  - **Storage uploads**: **VERIFIED** *(manual, emulator, 2026-10-10: file streamed to `cases/{caseId}/...` Storage bucket path)*.
-  - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8 live multi-client testing; covered by `@firestore_transactional` in automated fake test suite)*.
+  - **Firestore persistence**: **VERIFIED** *(manual, emulator, 2026-10-10: case survived a backend restart)*.
+  - **Storage upload**: **VERIFIED** *(manual, emulator, 2026-10-10: file seen in bucket)*.
+  - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
   - Migrated `CaseService` and `DocumentService` to direct Firestore persistence (`cases`, `cases/{caseId}/documents`, `idempotency_keys`).
   - Idempotency keys now persist in Firestore, guaranteeing duplicate prevention survives backend restarts.
   - Converted case acceptance to real Firestore transactions (`@firestore_transactional`) with race condition detection and HTTP 409 conflict.
@@ -120,7 +120,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - Do NOT start Phase 6e.
 
 ## 6. Known Issues & Tech Debt
-1. **`extractedAt` set on failure**: When document extraction fails (e.g. invalid PDF format or timeout), `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish terminal failure timestamp.
-2. **Documents collection layout differs from ARCHITECTURE.md**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies a single top-level `/documents` collection schema with a `caseId` field.
-3. **Bucket creation must happen in app startup, not manually**: Storage bucket auto-creation / check must be handled programmatically during backend startup lifecycle instead of relying on manual creation or predefined emulator setup.
+1. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
+2. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
+3. **The `medbridge-ai-documents` bucket must be created in app startup, not manually**: Storage bucket auto-creation / check must be handled programmatically during backend startup lifecycle instead of relying on manual creation or predefined emulator setup.
 
