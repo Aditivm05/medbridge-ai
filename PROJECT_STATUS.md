@@ -9,7 +9,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
 - [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix Firestore persistence & Storage uploads Verified (manual, emulator, 2026-10-10); Firestore transactions UNVERIFIED until Phase 8)*
+- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c Completed; Phase 6c-fix Firestore persistence & Storage uploads Verified (manual, emulator, 10 Oct 2026); Firestore transactions UNVERIFIED until Phase 8)*
 - [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
 
 ## 3. Files Created Across Phases 1 - 5
@@ -100,8 +100,8 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
 - **Phase 6c-Fix: Firestore Persistence & Storage Uploads:**
-  - **Firestore persistence**: **VERIFIED** *(manual, emulator, 2026-10-10: case survived a backend restart)*.
-  - **Storage upload**: **VERIFIED** *(manual, emulator, 2026-10-10: file seen in bucket)*.
+  - **Firestore persistence**: **VERIFIED** *(manual, emulator, 10 Oct 2026: case survived a backend restart)*.
+  - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in the emulator UI)*.
   - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
   - Migrated `CaseService` and `DocumentService` to direct Firestore persistence (`cases`, `cases/{caseId}/documents`, `idempotency_keys`).
   - Idempotency keys now persist in Firestore, guaranteeing duplicate prevention survives backend restarts.
