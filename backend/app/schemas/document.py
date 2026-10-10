@@ -27,6 +27,21 @@ def validate_magic_bytes(content: bytes, mime_type: str) -> bool:
     return content.startswith(expected_magic)
 
 
+class ExtractionStatus(str, Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    EXTRACTED = "EXTRACTED"
+    NEEDS_OCR = "NEEDS_OCR"
+    FAILED = "FAILED"
+
+
+class PageText(BaseModel):
+    pageNumber: int
+    text: str
+    charCount: int
+    status: ExtractionStatus = ExtractionStatus.EXTRACTED
+
+
 class DocumentUploadIntentRequest(BaseModel):
     fileName: str = Field(..., min_length=1, max_length=255)
     mimeType: str
@@ -50,8 +65,25 @@ class DocumentResponse(BaseModel):
     mimeType: str
     sizeBytes: int
     magicBytesValidated: bool = True
+    extractionStatus: ExtractionStatus = ExtractionStatus.PENDING
+    pageCount: Optional[int] = None
+    pages: list[PageText] = Field(default_factory=list)
     extractedText: Optional[str] = None
     ocrStatus: str = "pending"
+    errorMessage: Optional[str] = None
     uploadedAt: datetime
+    extractedAt: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentTextResponse(BaseModel):
+    documentId: str
+    caseId: str
+    extractionStatus: ExtractionStatus
+    pageCount: Optional[int] = None
+    pages: list[PageText] = Field(default_factory=list)
+    fullText: Optional[str] = None
+    errorMessage: Optional[str] = None
+    extractedAt: Optional[datetime] = None
+

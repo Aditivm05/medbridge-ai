@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, status
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, BackgroundTasks, status
 from typing import Optional, List
 from datetime import datetime
 import uuid
@@ -7,6 +7,8 @@ from app.schemas.document import (
     DocumentUploadIntentRequest,
     DocumentUploadIntentResponse,
     DocumentResponse,
+    DocumentTextResponse,
+    ExtractionStatus,
     ALLOWED_MIME_TYPES,
     MAX_FILE_SIZE_BYTES,
     MAX_DOCUMENTS_PER_CASE,
@@ -15,12 +17,13 @@ from app.schemas.document import (
 from app.schemas.audit import AuditEventType
 from app.services.audit_service import audit_service
 from app.services.case_service import case_service, CaseNotFoundError
+from app.services.document_service import document_service
 from app.core.auth import get_current_user, check_case_ownership, AuthenticatedUser
 
 router = APIRouter(prefix="/cases/{case_id}/documents", tags=["documents"])
 
 # In-memory document registry for local baseline testing
-_documents_store = {}
+_documents_store = document_service._documents
 
 
 @router.post("/upload-intent", response_model=DocumentUploadIntentResponse)
@@ -93,6 +96,7 @@ def request_upload_intent(
 @router.post("/upload-and-verify", response_model=DocumentResponse)
 async def upload_and_verify_document(
     case_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
@@ -105,6 +109,10 @@ async def upload_and_verify_document(
     - Extension matching declared MIME type
     - 10 MB maximum file size limit (and non-empty 0 bytes check)
     - Binary magic bytes matching declared format signature (%PDF-, JPEG JFIF/EXIF, PNG)
+
+    Non-blocking Phase 6c extraction:
+    - Enqueues background task to extract per-page text or mark NEEDS_OCR
+    - Never blocks the upload response
     """
     try:
         case = case_service.get_case(case_id)
@@ -198,11 +206,16 @@ async def upload_and_verify_document(
         mimeType=mime_type,
         sizeBytes=len(file_bytes),
         magicBytesValidated=True,
+        extractionStatus=ExtractionStatus.PROCESSING,
+        pageCount=None,
+        pages=[],
         extractedText=None,
-        ocrStatus="processed",
+        ocrStatus="pending",
         uploadedAt=now,
     )
-    _documents_store[doc_id] = doc_response
+
+    # Register document in service
+    document_service.register_document(doc_response, file_bytes)
 
     # Atomically increment document count on case
     case_service.increment_document_count(case_id)
@@ -213,6 +226,17 @@ async def upload_and_verify_document(
         actor_role=current_user.role,
         case_id=case_id,
         details={"documentId": doc_id, "fileName": filename, "size": len(file_bytes)},
+    )
+
+    # Enqueue non-blocking text extraction task
+    background_tasks.add_task(
+        document_service.process_document_extraction,
+        document_id=doc_id,
+        file_bytes=file_bytes,
+        mime_type=mime_type,
+        case_id=case_id,
+        actor_id=current_user.uid,
+        actor_role=current_user.role,
     )
 
     return doc_response
@@ -232,7 +256,7 @@ def list_case_documents(
             detail=str(e),
         )
     check_case_ownership(case.patientId, current_user)
-    return [doc for doc in _documents_store.values() if doc.caseId == case_id]
+    return document_service.list_case_documents(case_id)
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
@@ -250,11 +274,94 @@ def get_case_document(
             detail=str(e),
         )
     check_case_ownership(case.patientId, current_user)
-    doc = _documents_store.get(document_id)
+    doc = document_service.get_document(document_id)
     if not doc or doc.caseId != case_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{document_id}' not found for case '{case_id}'.",
         )
     return doc
+
+
+@router.get("/{document_id}/text", response_model=DocumentTextResponse)
+def get_document_extracted_text(
+    case_id: str,
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Returns per-page extracted text {pageNumber, text, charCount, status}
+    for verifiable 'document + page' fact citations.
+    Enforces strict patient ownership / clinician assignment gates.
+    """
+    try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    check_case_ownership(case.patientId, current_user)
+
+    doc = document_service.get_document(document_id)
+    if not doc or doc.caseId != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found for case '{case_id}'.",
+        )
+
+    return DocumentTextResponse(
+        documentId=doc.documentId,
+        caseId=doc.caseId,
+        extractionStatus=doc.extractionStatus,
+        pageCount=doc.pageCount,
+        pages=doc.pages,
+        fullText=doc.extractedText,
+        errorMessage=doc.errorMessage,
+        extractedAt=doc.extractedAt,
+    )
+
+
+@router.post("/{document_id}/extract", response_model=DocumentResponse)
+def trigger_document_extraction(
+    case_id: str,
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Manually triggers / retries synchronous text extraction for a document.
+    Enforces patient ownership / clinician assignment gates.
+    """
+    try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    check_case_ownership(case.patientId, current_user)
+
+    doc = document_service.get_document(document_id)
+    if not doc or doc.caseId != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found for case '{case_id}'.",
+        )
+
+    file_bytes = document_service._file_bytes_store.get(document_id)
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File binary content not cached for document '{document_id}'.",
+        )
+
+    return document_service.process_document_extraction(
+        document_id=document_id,
+        file_bytes=file_bytes,
+        mime_type=doc.mimeType,
+        case_id=case_id,
+        actor_id=current_user.uid,
+        actor_role=current_user.role,
+    )
+
 

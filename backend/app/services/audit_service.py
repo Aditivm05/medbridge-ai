@@ -36,6 +36,8 @@ class AuditService:
     def get_events_for_case(self, case_id: str) -> List[AuditEventResponse]:
         return [e for e in self._events if e.caseId == case_id]
 
+    get_case_events = get_events_for_case
+
     def list_recent_events(self, limit: int = 50) -> List[AuditEventResponse]:
         return sorted(self._events, key=lambda e: e.timestamp, reverse=True)[:limit]
 
