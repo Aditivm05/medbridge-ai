@@ -9,7 +9,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
 - [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a Backend Validation Completed)*
+- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a Backend Validation & Phase 6b Frontend Upload UI Completed)*
 - [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
 
 ## 3. Files Created Across Phases 1 - 5
@@ -67,7 +67,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 
 ## 4. Verified Milestones & Test Outputs
 - **Automated Test Suite (34/34 Passing):**
-  - `test_phase6a_document_validation.py` (13 tests) -> ALL PASSED
+  - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
     - `test_valid_pdf_upload_succeeds` -> PASSED
     - `test_valid_jpeg_and_png_uploads_succeed` -> PASSED
     - `test_invalid_extension_rejected` -> PASSED (HTTP 400)
@@ -84,9 +84,14 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
-- **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1499 modules transformed in 3.59s`, zero TS errors).
+- **Phase 6b Frontend Upload UI:**
+  - `DocumentUploadScreen.tsx` updated with drag & drop file picker, client checks (PDF/JPG/PNG, max 10 MB, max 5 files), `XMLHttpRequest` real progress tracking, in-memory queue, status badges (`Selected`, `Uploading`, `Confirmed by server`, `Failed`), per-file retry mechanism, and error mapping.
+  - `api.uploadDocument` implemented in `frontend/src/services/api.ts` with `xhr.upload.onprogress`.
+- **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed in 3.76s`, zero TS errors).
 - **Backend Health Check:** `GET http://127.0.0.1:8000/health` returned HTTP 200.
 - **Frontend Server:** `GET http://127.0.0.1:5173` returned HTTP 200.
 
 ## 5. Next Steps
-- Phase 6b: Audio/voice upload handling and transcription.
+- Await user confirmation on Phase 6b.
+- Do NOT start Phase 6c until confirmed.
+
