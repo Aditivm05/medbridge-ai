@@ -1,4 +1,7 @@
+import os
 import typing
+
+os.environ["TESTING"] = "1"
 
 # Python 3.10.0 ForwardRef compatibility shim for test runner
 _orig_fr_init = typing.ForwardRef.__init__

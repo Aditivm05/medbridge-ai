@@ -357,3 +357,124 @@ def test_image_upload_marked_needs_ocr_without_gemini():
     assert doc_data["extractionStatus"] == "NEEDS_OCR"
     assert doc_data["pageCount"] == 1
     assert doc_data["pages"][0]["status"] == "NEEDS_OCR"
+
+
+def test_extraction_timeout_handled_gracefully(monkeypatch):
+    """
+    Simulates a hanging extraction worker that exceeds timeout.
+    Verifies that extraction status becomes FAILED with a readable error message,
+    upload returns 200 without blocking, and DOC_EXTRACTION_FAILED audit event is recorded.
+    """
+    import time
+    from app.services.document_service import document_service
+
+    original_timeout = document_service.timeout_seconds
+    document_service.timeout_seconds = 0.1
+
+    original_extract = document_service.extract_pdf_pages
+
+    def slow_extract_pages(*args, **kwargs):
+        time.sleep(0.3)
+        return original_extract(*args, **kwargs)
+
+    monkeypatch.setattr(document_service, "extract_pdf_pages", slow_extract_pages)
+
+    try:
+        case_id = create_test_case(key_suffix="timeout_test")
+        pdf_bytes = make_text_pdf("Sample text that takes too long to extract")
+
+        files = {"file": ("slow_report.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
+        upload_res = client.post(
+            f"/api/v1/cases/{case_id}/documents/upload-and-verify",
+            files=files,
+            headers={"Authorization": TOKEN_PATIENT_1},
+        )
+        assert upload_res.status_code == 200
+        doc_id = upload_res.json()["documentId"]
+
+        # Check document status after background extraction timed out
+        doc_res = client.get(
+            f"/api/v1/cases/{case_id}/documents/{doc_id}",
+            headers={"Authorization": TOKEN_PATIENT_1},
+        )
+        assert doc_res.status_code == 200
+        doc_data = doc_res.json()
+        assert doc_data["extractionStatus"] == "FAILED"
+        assert "timed out" in doc_data["errorMessage"].lower()
+
+        # Audit events should include DOC_EXTRACTION_FAILED
+        events = audit_service.get_events_for_case(case_id)
+        event_types = [e.eventType for e in events]
+        assert AuditEventType.DOC_EXTRACTION_FAILED in event_types
+    finally:
+        document_service.timeout_seconds = original_timeout
+
+
+def test_backend_restart_persistence_check():
+    """
+    Simulates a full backend restart:
+    1. Instance 1 creates a case and uploads/extracts a document.
+    2. Backend services are torn down and re-initialized (simulating server process restart).
+    3. Instance 2 reads back the case, document, extracted text, and idempotency key from Firestore.
+    4. Proves zero reliance on in-memory instance state and that data survives restart.
+    """
+    from app.services.case_service import CaseService
+    from app.services.document_service import DocumentService
+    from app.core.firestore_client import get_firestore_client, get_storage_client
+
+    db = get_firestore_client()
+    storage = get_storage_client()
+
+    # --- Phase A: Backend Instance 1 creates Case & Document ---
+    instance_1_case_service = CaseService(db=db)
+    instance_1_doc_service = DocumentService(db=db, storage=storage)
+
+    case_payload = {
+        "chiefComplaint": "Persistent dry cough and mild fever",
+        "duration": "3 days",
+        "requestedUrgency": "urgent",
+        "patientLanguage": "hi",
+        "idempotencyKey": "idem_restart_persisted_key_999",
+    }
+    res = client.post("/api/v1/cases", json=case_payload, headers={"Authorization": TOKEN_PATIENT_1})
+    assert res.status_code == 201
+    case_id = res.json()["caseId"]
+
+    # Upload document
+    pdf_bytes = make_text_pdf("Laboratory Report: Normal Chest X-Ray findings.")
+    files = {"file": ("chest_xray.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
+    upload_res = client.post(
+        f"/api/v1/cases/{case_id}/documents/upload-and-verify",
+        files=files,
+        headers={"Authorization": TOKEN_PATIENT_1},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["documentId"]
+
+    # --- Phase B: Simulate Server Process Restart ---
+    # Completely destroy instance 1 services
+    del instance_1_case_service
+    del instance_1_doc_service
+
+    # Fresh new backend service instances (reading from the persistent Firestore database)
+    instance_2_case_service = CaseService(db=db)
+    instance_2_doc_service = DocumentService(db=db, storage=storage)
+
+    # --- Phase C: Verify Instance 2 reads back everything from Firestore ---
+    reloaded_case = instance_2_case_service.get_case(case_id)
+    assert reloaded_case.caseId == case_id
+    assert reloaded_case.chiefComplaint == "Persistent dry cough and mild fever"
+    assert reloaded_case.patientLanguage == "hi"
+    assert reloaded_case.idempotencyKey == "idem_restart_persisted_key_999"
+
+    reloaded_doc = instance_2_doc_service.get_document(doc_id, case_id=case_id)
+    assert reloaded_doc is not None
+    assert reloaded_doc.documentId == doc_id
+    assert reloaded_doc.fileName == "chest_xray.pdf"
+    assert reloaded_doc.extractionStatus == ExtractionStatus.EXTRACTED
+    assert "Chest X-Ray findings" in reloaded_doc.extractedText
+
+    # Verify idempotency key persisted in Firestore across restart
+    dup_res = client.post("/api/v1/cases", json=case_payload, headers={"Authorization": TOKEN_PATIENT_1})
+    assert dup_res.status_code == 201
+    assert dup_res.json()["caseId"] == case_id

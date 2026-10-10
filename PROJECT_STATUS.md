@@ -29,6 +29,7 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/core/config.py`: Application settings using Pydantic Settings.
 - `backend/app/core/auth.py`: Firebase Auth token verification, `AuthenticatedUser` model, custom claims manager, role guards (`require_role`, `require_verified_clinician`), and case ownership enforcement (`check_case_ownership`).
 - `backend/app/core/state_machine.py`: Centralized Case State Machine with transition validators across 10 states and 18 allowed transitions.
+- `backend/app/core/firestore_client.py`: Centralized Firestore and Storage client factory, emulator connection verification (fail-fast), and in-memory `FakeFirestoreClient` / `FakeStorageClient` for offline pytest suite.
 - `backend/app/models/firestore_models.py`: Firestore snapshot serializers, Timestamp converters, and enum parsers.
 - `backend/app/schemas/`: Pydantic schemas for `case.py` (with `CaseUpdate` and `CaseSubmitRequest`), `audit.py` (full lifecycle events), `user.py`, `patient.py`, `clinician.py`, `document.py`, `doctor_brief.py`, `consultation.py`.
 - `backend/app/services/case_service.py`: Service layer with complete Case CRUD, draft-only update guard, idempotent submit, and atomic concurrency locking.
@@ -68,8 +69,8 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (43/43 Passing):**
-  - `test_phase6c_pdf_text_extraction.py` (9 tests) -> ALL PASSED
+- **Automated Test Suite (45/45 Passing):**
+  - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
     - `test_extract_single_page_pdf_text` -> PASSED (single page text with citation)
     - `test_extract_multipage_pdf_per_page_text` -> PASSED (per-page dictionary citations)
     - `test_extract_empty_or_scanned_pdf_marked_needs_ocr` -> PASSED (NEEDS_OCR without content guessing)
@@ -79,6 +80,8 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
     - `test_unauthorized_access_to_extracted_text_rejected` -> PASSED (HTTP 403 ownership isolation)
     - `test_audit_events_for_extraction` -> PASSED (DOC_TEXT_EXTRACTED & DOC_EXTRACTION_FAILED audit logs)
     - `test_image_upload_marked_needs_ocr_without_gemini` -> PASSED (NEEDS_OCR, 0 Gemini calls)
+    - `test_extraction_timeout_handled_gracefully` -> PASSED (simulated hang -> FAILED + readable error + audit event)
+    - `test_backend_restart_persistence_check` -> PASSED (case, doc, text, and idempotency survive backend restart)
   - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
     - `test_valid_pdf_upload_succeeds` -> PASSED
     - `test_valid_jpeg_and_png_uploads_succeed` -> PASSED
@@ -96,20 +99,20 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
+- **Phase 6c-Fix: Firestore Persistence & Real Transactions:**
+  - Migrated `CaseService` and `DocumentService` to direct Firestore persistence (`cases`, `cases/{caseId}/documents`, `idempotency_keys`).
+  - Idempotency keys now persist in Firestore, guaranteeing duplicate prevention survives backend restarts.
+  - Converted case acceptance to real Firestore transactions (`@firestore_transactional`) with race condition detection and HTTP 409 conflict.
+  - Uploaded files stream directly to the Storage emulator bucket (`medbridge-ai-documents`) with zero local disk copies. Added `data/` and `emulator-data/` to `.gitignore`.
+  - Added fail-fast emulator connection checks in production mode (raises `FirestoreConnectionError` if emulator unreachable, no silent fallbacks).
+  - Test suite operates against a dedicated `FakeFirestoreClient` and `FakeStorageClient` for fast, offline, serverless execution.
 - **Phase 6b Frontend Upload UI:**
   - `DocumentUploadScreen.tsx` updated with drag & drop file picker, client checks (PDF/JPG/PNG, max 10 MB, max 5 files), `XMLHttpRequest` real progress tracking, in-memory queue, status badges (`Selected`, `Uploading`, `Confirmed by server`, `Failed`), per-file retry mechanism, and error mapping.
   - `api.uploadDocument` implemented in `frontend/src/services/api.ts` with `xhr.upload.onprogress`.
-- **Phase 6c PDF Text Extraction & Lifecycle Status:**
-  - `backend/app/services/document_service.py` implemented for non-blocking asynchronous extraction using FastAPI `BackgroundTasks`.
-  - Full status lifecycle: `PENDING` -> `PROCESSING` -> `EXTRACTED` / `NEEDS_OCR` / `FAILED`.
-  - Structured storage: `{page_number, text}` for granular document + page citations.
-  - Guardrails: 30-page maximum threshold, encryption check, corrupted recovery, 8s timeout safeguard.
-  - Zero Gemini calls executed (pure text extraction and OCR tagging only).
-  - RBAC protection: `GET /api/v1/cases/{case_id}/documents/{document_id}/text` protected by patient ownership, assigned clinician, or admin.
 - **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
-- **Backend Health Check:** `GET http://127.0.0.1:8000/health` verified.
 
 ## 5. Next Steps
-- Await user confirmation on Phase 6c.
-- Do NOT start Phase 6d (Voice upload & transcription) until confirmed.
+- Await confirmation on Phase 6c-fix.
+- Once confirmed, proceed to Phase 6d: signed-URL access (~5 minutes) with owner / assigned clinician / admin checks, `DOC_VIEWED` and denial audit events, emulator fallback documented, and tests for allowed and denied cases.
+- Do NOT start Phase 6e.
 

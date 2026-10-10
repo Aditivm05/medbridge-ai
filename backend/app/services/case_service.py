@@ -2,10 +2,13 @@ import threading
 from typing import Dict, List, Optional
 from datetime import datetime
 import uuid
+
 from app.core.state_machine import CaseStatus, validate_transition, InvalidStateTransitionError
 from app.schemas.case import CaseCreate, CaseUpdate, CaseResponse
 from app.schemas.audit import AuditEventType
 from app.services.audit_service import audit_service
+from app.core.firestore_client import get_firestore_client, firestore_transactional
+from app.models.firestore_models import case_to_firestore_dict, case_from_firestore_dict
 
 
 class CaseConflictError(Exception):
@@ -31,21 +34,87 @@ class DuplicateIdempotencyKeyError(Exception):
 
 
 class CaseService:
-    def __init__(self):
-        self._cases: Dict[str, CaseResponse] = {}
-        self._idempotency_map: Dict[str, str] = {}  # idempotency_key -> caseId
-        self._lock = threading.Lock()  # Atomic lock for thread safety & simulated Firestore transactions
+    def __init__(self, db=None):
+        self._db = db
+        self._lock = threading.Lock()
+
+    @property
+    def db(self):
+        if self._db is None:
+            self._db = get_firestore_client()
+        return self._db
+
+    # Compatibility adapter for legacy test references
+    @property
+    def _cases(self):
+        parent = self
+        class _CasesAdapter:
+            def __getitem__(self, case_id: str):
+                return parent.get_case(case_id)
+
+            def __setitem__(self, case_id: str, case: CaseResponse):
+                data = case_to_firestore_dict(case)
+                parent.db.collection("cases").document(case_id).set(data)
+
+            def get(self, case_id: str, default=None):
+                try:
+                    return parent.get_case(case_id)
+                except CaseNotFoundError:
+                    return default
+
+            def values(self):
+                return parent.list_cases()
+
+            def __contains__(self, case_id: str):
+                snap = parent.db.collection("cases").document(case_id).get()
+                return snap.exists
+
+        return _CasesAdapter()
+
+    @property
+    def _idempotency_map(self):
+        parent = self
+        class _IdemAdapter:
+            def __getitem__(self, key: str):
+                snap = parent.db.collection("idempotency_keys").document(key).get()
+                if not snap.exists:
+                    raise KeyError(key)
+                return snap.to_dict().get("caseId")
+
+            def __setitem__(self, key: str, case_id: str):
+                parent.db.collection("idempotency_keys").document(key).set(
+                    {"caseId": case_id, "createdAt": datetime.utcnow().isoformat()}
+                )
+
+            def __contains__(self, key: str):
+                snap = parent.db.collection("idempotency_keys").document(key).get()
+                return snap.exists
+
+            def get(self, key: str, default=None):
+                snap = parent.db.collection("idempotency_keys").document(key).get()
+                if not snap.exists:
+                    return default
+                return snap.to_dict().get("caseId")
+
+        return _IdemAdapter()
 
     def create_case(self, case_in: CaseCreate, actor_id: str, actor_role: str = "patient") -> CaseResponse:
         """
         Creates a new case in DRAFT status.
-        Idempotent: If an idempotencyKey has already been processed, returns the existing case.
+        Idempotent: Idempotency keys persist in Firestore under 'idempotency_keys' collection.
+        If an idempotencyKey has already been processed, returns the existing case.
         """
         with self._lock:
-            # Check idempotency key to prevent duplicate creation on double-click
-            if case_in.idempotencyKey in self._idempotency_map:
-                existing_id = self._idempotency_map[case_in.idempotencyKey]
-                return self._cases[existing_id]
+            # 1. Check persistent idempotency key in Firestore
+            idem_ref = self.db.collection("idempotency_keys").document(case_in.idempotencyKey)
+            idem_snap = idem_ref.get()
+            if idem_snap.exists:
+                existing_case_id = idem_snap.to_dict().get("caseId")
+                if existing_case_id:
+                    try:
+                        return self.get_case(existing_case_id)
+                    except CaseNotFoundError:
+                        pass
 
             case_id = f"case_{uuid.uuid4().hex[:12]}"
             now = datetime.utcnow()
@@ -67,8 +136,14 @@ class CaseService:
                 createdAt=now,
                 updatedAt=now,
             )
-            self._cases[case_id] = new_case
-            self._idempotency_map[case_in.idempotencyKey] = case_id
+
+            # Persist Case & Idempotency Key to Firestore
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(new_case))
+            idem_ref.set({
+                "caseId": case_id,
+                "createdAt": now.isoformat(),
+                "patientId": new_case.patientId,
+            })
 
             audit_service.log_event(
                 event_type=AuditEventType.CASE_CREATED,
@@ -84,24 +159,30 @@ class CaseService:
             return new_case
 
     def get_case(self, case_id: str) -> CaseResponse:
-        """Retrieves a single case by caseId."""
-        case = self._cases.get(case_id)
-        if not case:
+        """Retrieves a single case from Firestore."""
+        doc_snap = self.db.collection("cases").document(case_id).get()
+        if not doc_snap.exists:
             raise CaseNotFoundError(f"Case '{case_id}' not found.")
-        return case
+        return case_from_firestore_dict(case_id, doc_snap.to_dict())
 
     def list_cases(self, patient_id: Optional[str] = None, clinician_id: Optional[str] = None) -> List[CaseResponse]:
-        """Lists cases filtered optionally by patient_id or assigned clinician_id."""
-        cases = list(self._cases.values())
+        """Lists cases from Firestore, filtered optionally by patient_id or assigned clinician_id."""
+        query = self.db.collection("cases")
         if patient_id:
-            cases = [c for c in cases if c.patientId == patient_id]
+            query = query.where("patientId", "==", patient_id)
         if clinician_id:
-            cases = [c for c in cases if c.assignedClinicianId == clinician_id]
+            query = query.where("assignedClinicianId", "==", clinician_id)
+
+        snapshots = query.stream()
+        cases = [case_from_firestore_dict(s.id, s.to_dict()) for s in snapshots]
         return sorted(cases, key=lambda c: c.createdAt, reverse=True)
 
     def list_matching_pool(self) -> List[CaseResponse]:
         """Returns cases available in MATCHING status for clinicians to claim."""
-        return [c for c in self._cases.values() if c.status == CaseStatus.MATCHING and c.assignedClinicianId is None]
+        query = self.db.collection("cases").where("status", "==", CaseStatus.MATCHING.value)
+        snapshots = query.stream()
+        cases = [case_from_firestore_dict(s.id, s.to_dict()) for s in snapshots]
+        return [c for c in cases if c.assignedClinicianId is None]
 
     def update_case(
         self,
@@ -111,9 +192,8 @@ class CaseService:
         actor_role: str,
     ) -> CaseResponse:
         """
-        Updates fields of an existing case.
+        Updates fields of an existing case in Firestore.
         Enforces rule: Can ONLY update while case is in DRAFT status.
-        Increments version and records a CASE_UPDATED audit event.
         """
         with self._lock:
             case = self.get_case(case_id)
@@ -138,7 +218,7 @@ class CaseService:
                 update_data["patientLanguage"] = update_in.patientLanguage
 
             updated_case = case.model_copy(update=update_data)
-            self._cases[case_id] = updated_case
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))
 
             audit_service.log_event(
                 event_type=AuditEventType.CASE_UPDATED,
@@ -159,10 +239,6 @@ class CaseService:
         actor_role: str,
         reason: Optional[str] = "Cancelled by user",
     ) -> CaseResponse:
-        """
-        Cancels / archives a case.
-        If in DRAFT or any state where CANCELLED is allowed, transitions to CANCELLED.
-        """
         return self.transition_status(
             case_id=case_id,
             target_status=CaseStatus.CANCELLED,
@@ -179,7 +255,7 @@ class CaseService:
         idempotency_key: Optional[str] = None,
     ) -> CaseResponse:
         """
-        Idempotent submission of a case:
+        Idempotent submission of a case in Firestore:
         - If DRAFT: transitions to SUBMITTED, sets submittedAt, logs CASE_SUBMITTED.
         - If already SUBMITTED: returns existing case (idempotent, no error).
         - If any other state: raises InvalidStateTransitionError.
@@ -187,10 +263,8 @@ class CaseService:
         with self._lock:
             case = self.get_case(case_id)
             if case.status == CaseStatus.SUBMITTED:
-                # Idempotent return without duplicate transition or exception
                 return case
 
-            # Must be valid transition from current to SUBMITTED
             validate_transition(case.status, CaseStatus.SUBMITTED)
 
             now = datetime.utcnow()
@@ -202,7 +276,7 @@ class CaseService:
                     "version": case.version + 1,
                 }
             )
-            self._cases[case_id] = updated_case
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))
 
             audit_service.log_event(
                 event_type=AuditEventType.CASE_SUBMITTED,
@@ -226,12 +300,11 @@ class CaseService:
         reason: Optional[str] = None,
     ) -> CaseResponse:
         """
-        Central State Transition Engine.
-        Single source of truth for all case state changes:
+        Central State Transition Engine persisting to Firestore.
         1. Validates transition legality via validate_transition().
-        2. Sets appropriate milestone timestamps (submittedAt, acceptedAt, completedAt).
+        2. Sets milestone timestamps (submittedAt, acceptedAt, completedAt).
         3. Increments version and bumps updatedAt.
-        4. Emits append-only AuditEvent for the transition.
+        4. Emits append-only AuditEvent.
         """
         with self._lock:
             case = self.get_case(case_id)
@@ -251,9 +324,8 @@ class CaseService:
                 update_data["completedAt"] = now
 
             updated_case = case.model_copy(update=update_data)
-            self._cases[case_id] = updated_case
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))
 
-            # Map status transitions to explicit AuditEventTypes
             event_type_map = {
                 CaseStatus.SUBMITTED: AuditEventType.CASE_SUBMITTED,
                 CaseStatus.MATCHING: AuditEventType.CASE_MATCHING_ENQUEUED,
@@ -283,14 +355,22 @@ class CaseService:
 
     def accept_case_atomic(self, case_id: str, clinician_id: str) -> CaseResponse:
         """
-        Concurrency-safe case acceptance.
-        Simulates Firestore atomic transaction:
-        Re-reads case, checks status == MATCHING and unassigned, sets assignedClinicianId and ACCEPTED.
-        Any concurrent attempt raises CaseConflictError (HTTP 409).
+        Concurrency-safe case acceptance using a real Firestore transaction:
+        Re-reads case inside the transaction, checks status == MATCHING and unassigned,
+        then sets clinician and ACCEPTED.
+        Any concurrent race collision raises CaseConflictError (HTTP 409).
         """
-        with self._lock:
-            case = self.get_case(case_id)
-            if case.status != CaseStatus.MATCHING or case.assignedClinicianId is not None:
+        @firestore_transactional(self.db)
+        def _tx_accept(tx):
+            case_ref = self.db.collection("cases").document(case_id)
+            snapshot = case_ref.get(transaction=tx)
+            if not snapshot.exists:
+                raise CaseNotFoundError(f"Case '{case_id}' not found.")
+            data = snapshot.to_dict()
+            current_status = data.get("status")
+            assigned = data.get("assignedClinicianId")
+
+            if current_status != CaseStatus.MATCHING.value or assigned is not None:
                 audit_service.log_event(
                     event_type=AuditEventType.CONFLICT_DETECTED,
                     actor_id=clinician_id,
@@ -298,38 +378,41 @@ class CaseService:
                     case_id=case_id,
                     details={
                         "attemptedClinicianId": clinician_id,
-                        "currentStatus": case.status.value,
-                        "alreadyAssignedTo": case.assignedClinicianId,
+                        "currentStatus": current_status,
+                        "alreadyAssignedTo": assigned,
                     },
                 )
                 raise CaseConflictError(
                     f"Case '{case_id}' cannot be accepted. "
-                    f"Status is '{case.status.value}' and assignedClinicianId is '{case.assignedClinicianId}'."
+                    f"Status is '{current_status}' and assignedClinicianId is '{assigned}'."
                 )
 
             now = datetime.utcnow()
-            updated_case = case.model_copy(
-                update={
-                    "status": CaseStatus.ACCEPTED,
-                    "assignedClinicianId": clinician_id,
-                    "acceptedAt": now,
-                    "updatedAt": now,
-                    "version": case.version + 1,
-                }
-            )
-            self._cases[case_id] = updated_case
+            new_version = data.get("version", 1) + 1
+            updates = {
+                "status": CaseStatus.ACCEPTED.value,
+                "assignedClinicianId": clinician_id,
+                "acceptedAt": now.isoformat(),
+                "updatedAt": now.isoformat(),
+                "version": new_version,
+            }
+            tx.update(case_ref, updates)
+            merged = dict(data, **updates)
+            return case_from_firestore_dict(case_id, merged)
 
-            audit_service.log_event(
-                event_type=AuditEventType.CASE_ACCEPTED,
-                actor_id=clinician_id,
-                actor_role="clinician",
-                case_id=case_id,
-                details={"assignedClinicianId": clinician_id, "version": updated_case.version},
-            )
-            return updated_case
+        updated_case = _tx_accept()
+
+        audit_service.log_event(
+            event_type=AuditEventType.CASE_ACCEPTED,
+            actor_id=clinician_id,
+            actor_role="clinician",
+            case_id=case_id,
+            details={"assignedClinicianId": clinician_id, "version": updated_case.version},
+        )
+        return updated_case
 
     def increment_document_count(self, case_id: str) -> CaseResponse:
-        """Atomically increments the document count for a case."""
+        """Atomically increments the document count on the case in Firestore."""
         with self._lock:
             case = self.get_case(case_id)
             updated_case = case.model_copy(
@@ -338,7 +421,7 @@ class CaseService:
                     "updatedAt": datetime.utcnow(),
                 }
             )
-            self._cases[case_id] = updated_case
+            self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))
             return updated_case
 
 

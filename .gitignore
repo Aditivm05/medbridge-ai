@@ -26,7 +26,13 @@ dist-ssr/
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+auth-debug.log
+storage-debug.log
 
 # IDE
 .vscode/
 .idea/
+
+# Local data & emulator dumps
+data/
+emulator-data/

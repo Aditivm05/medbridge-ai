@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from app.schemas.case import CaseResponse, CaseCreate, RequestedUrgency
 from app.schemas.audit import AuditEventResponse, AuditEventType
+from app.schemas.document import DocumentResponse, ExtractionStatus, PageText
 from app.core.state_machine import CaseStatus
 
 
@@ -87,3 +88,45 @@ def audit_event_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> AuditE
     if "timestamp" in doc_data:
         doc_data["timestamp"] = firestore_timestamp_to_datetime(doc_data["timestamp"]) or datetime.utcnow()
     return AuditEventResponse.model_validate(doc_data)
+
+
+def document_to_firestore_dict(doc: DocumentResponse) -> Dict[str, Any]:
+    """Serializes a DocumentResponse Pydantic model to a Firestore-compatible document dictionary."""
+    data = doc.model_dump()
+    data["extractionStatus"] = doc.extractionStatus.value
+    if data.get("pages"):
+        data["pages"] = [
+            {
+                "pageNumber": p["pageNumber"],
+                "text": p["text"],
+                "charCount": p["charCount"],
+                "status": p["status"].value if hasattr(p["status"], "value") else str(p["status"]),
+            }
+            for p in data["pages"]
+        ]
+    for date_field in ["uploadedAt", "extractedAt"]:
+        if data.get(date_field) and isinstance(data[date_field], datetime):
+            data[date_field] = data[date_field].isoformat()
+    return data
+
+
+def document_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> DocumentResponse:
+    """Deserializes a Firestore document dictionary into a DocumentResponse model."""
+    doc_data = dict(data)
+    doc_data["documentId"] = doc_id
+    if "extractionStatus" in doc_data and isinstance(doc_data["extractionStatus"], str):
+        doc_data["extractionStatus"] = ExtractionStatus(doc_data["extractionStatus"])
+    if "pages" in doc_data and isinstance(doc_data["pages"], list):
+        parsed_pages = []
+        for p in doc_data["pages"]:
+            p_dict = dict(p)
+            if "status" in p_dict and isinstance(p_dict["status"], str):
+                p_dict["status"] = ExtractionStatus(p_dict["status"])
+            parsed_pages.append(PageText.model_validate(p_dict))
+        doc_data["pages"] = parsed_pages
+    for date_field in ["uploadedAt", "extractedAt"]:
+        if date_field in doc_data:
+            doc_data[date_field] = firestore_timestamp_to_datetime(doc_data[date_field])
+    if not doc_data.get("uploadedAt"):
+        doc_data["uploadedAt"] = datetime.utcnow()
+    return DocumentResponse.model_validate(doc_data)
