@@ -216,6 +216,10 @@ class CaseService:
                 update_data["requestedUrgency"] = update_in.requestedUrgency
             if update_in.patientLanguage is not None:
                 update_data["patientLanguage"] = update_in.patientLanguage
+            if update_in.metadata is not None:
+                current_meta = dict(case.metadata or {})
+                current_meta.update(update_in.metadata)
+                update_data["metadata"] = current_meta
 
             updated_case = case.model_copy(update=update_data)
             self.db.collection("cases").document(case_id).set(case_to_firestore_dict(updated_case))

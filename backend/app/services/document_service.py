@@ -131,6 +131,8 @@ class DocumentService:
             docs = [document_from_firestore_dict(s.id, s.to_dict()) for s in snaps]
             return sorted(docs, key=lambda d: d.uploadedAt, reverse=True)
 
+    list_documents = list_case_documents
+
     def list_all_documents(self) -> List[DocumentResponse]:
         """Lists all registered documents across all cases."""
         with self._lock:

@@ -131,3 +131,25 @@ def document_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> DocumentR
     if not doc_data.get("uploadedAt"):
         doc_data["uploadedAt"] = datetime.utcnow()
     return DocumentResponse.model_validate(doc_data)
+
+
+def doctor_brief_to_firestore_dict(brief: Any) -> Dict[str, Any]:
+    """Serializes a DoctorBrief Pydantic model to a Firestore-compatible document dictionary."""
+    data = brief.model_dump(mode="json")
+    if hasattr(brief.briefStatus, "value"):
+        data["briefStatus"] = brief.briefStatus.value
+    return data
+
+
+def doctor_brief_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
+    """Deserializes a Firestore document dictionary into a DoctorBrief model."""
+    from app.schemas.doctor_brief import DoctorBrief, BriefStatus
+    doc_data = dict(data)
+    doc_data["briefId"] = doc_id
+    if "briefStatus" in doc_data and isinstance(doc_data["briefStatus"], str):
+        doc_data["briefStatus"] = BriefStatus(doc_data["briefStatus"])
+    for date_field in ["createdAt", "updatedAt", "lastEditedAt", "approvedAt", "reviewedAt"]:
+        if date_field in doc_data and doc_data[date_field]:
+            doc_data[date_field] = firestore_timestamp_to_datetime(doc_data[date_field])
+    return DoctorBrief.model_validate(doc_data)
+

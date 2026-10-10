@@ -8,11 +8,22 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - [x] **Phase 2: Full-Stack Scaffolding, README, Landing Page & GET /health** *(Completed & Verified)*
 - [x] **Phase 3: All 7 Interactive Screens, Synthetic Data, Mock Services & Responsive Layouts** *(Completed & Verified)*
 - [x] **Phase 4: Firebase Auth (Emulator-First), Role Custom Claims, Protected Routes & Ownership Gates** *(Completed & Verified)*
-- [x] **Phase 5: Database and Case Management** *(Completed & Verified)*
-- [ ] **Phase 6: Documents and Voice** *(In Progress: Phase 6a, 6b, 6c, 6d Completed; Phase 6e Gemini Multimodal OCR Implemented (13/13 tests passing, 77/77 backend suite passing); Real-Gemini extraction marked UNVERIFIED until manual run; Stream endpoint on real emulator marked UNVERIFIED; Firestore transactions UNVERIFIED until Phase 8)*
-- [ ] **Phase 7: AI Doctor Brief (Gemini)** *(Pending)*
+- [x] **Phase 5: Database and Case Management** *(Completed. Persistence verified on real emulator (10 Oct 2026); transaction acceptance UNVERIFIED until Phase 8.)*
+- [ ] **Phase 6: Documents and Voice** *(Not fully verified. Voice input = PLANNED. Real-Gemini OCR, 6d stream endpoint on real emulator, and uvicorn log filter UNVERIFIED)*
+  - **Phase 6a**: Upload intent, validation (mime, magic bytes, size, file count) — **Status**: Completed | **Tag**: `phase-6a-complete`
+  - **Phase 6b**: Frontend Document Upload Screen with drag-and-drop & XHR upload progress — **Status**: Completed | **Tag**: `phase-6b-complete`
+  - **Phase 6c**: Text-based PDF extraction via pypdf & low-text detection — **Status**: Completed | **Tag**: `phase-6c-complete`
+  - **Phase 6c-fix**: Firestore document persistence and emulator storage bucket auto-creation — **Status**: Completed | **Tags**: `phase-6c-fix-fakes-only`, `phase-6c-fix-verified`
+  - **Phase 6d**: Document access via short-lived HMAC stream URLs and signed URLs — **Status**: Completed | **Tag**: `phase-6d-fakes-only`
+  - **Phase 6e**: Gemini multimodal OCR for scanned PDFs and images — **Status**: Completed (mocked tests only) | **Tag**: `phase-6e-fakes-only`
+  - **Voice Input**: Speech-to-text / voice intake — **Status**: PLANNED
+- [ ] **Phase 7: AI Doctor Brief (Gemini)** *(In Progress)*
+  - **Phase 7a**: AI Doctor Brief backend: strict Pydantic DoctorBrief schema (no diagnosis/prescription), Gemini generation service with fallback skeleton, document reference validation, structured conflicts list, brief endpoints (`generate`, `get`, `put`, `approve`, `review`), lifecycle (`DRAFT_AI` -> `PATIENT_APPROVED` -> `CLINICIAN_REVIEWED`), version snapshots, and rate limiting — **Status**: Completed (mocked tests passing; endpoints included in 7a)
+  - **Remaining**:
+    - **Phase 7c**: Frontend Doctor Brief review screen (interactive edits, patient approve, clinician review) *(Pending)*
+    - **Real-Gemini brief test**: Live API verification with real Gemini API key *(UNVERIFIED)*
 
-## 3. Files Created Across Phases 1 - 5
+## 3. Files Created Across Phases 1 - 7a
 ### Architecture, Docs & Infrastructure
 - `docs/ARCHITECTURE.md`: Complete system architecture, data models for 10 collections, state machine table, concurrency transaction rules, and REST API blueprint.
 - `README.md`: Comprehensive beginner-friendly setup guide with click-by-click commands, architecture diagram, and expected outputs.
@@ -35,8 +46,10 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/services/case_service.py`: Service layer with complete Case CRUD, draft-only update guard, idempotent submit, and atomic concurrency locking.
 - `backend/app/services/document_service.py`: Extraction service per-page (`pypdf`), low-text `NEEDS_OCR` tagging, encrypted/corrupted/page-limit safeguards (30 pages max), audit events, and Phase 6e Gemini multimodal OCR pipeline.
 - `backend/app/services/gemini_service.py`: Multimodal Gemini OCR service with strict data-only prompt, Pydantic validation, exponential backoff on 429/5xx, and synthetic data notices.
+- `backend/app/services/brief_service.py`: AI Doctor Brief service using Google GenAI SDK, strict data-only prompt, Pydantic structured output, conflict detection, rate limiting, and fallback skeleton.
 - `backend/app/services/audit_service.py`: Append-only audit logger.
-- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD + submit + accept + matching), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `briefs.py` (Doctor Brief generate, read, edit, patient approve, clinician review), `audit.py` (with `/audit/cases/{case_id}`).
+- `backend/tests/test_phase7a_doctor_brief.py`: Automated Phase 7a Doctor Brief test suite (12 tests: Complete info, missing info, conflicting info, malformed JSON fallback, 429/5xx retry, 400 fail, timeout, injection defense, no-diagnosis schema rule, invalid doc references dropped, RBAC gates, lifecycle/re-approval).
 - `backend/tests/test_phase6e_gemini_ocr_extraction.py`: Automated Phase 6e OCR test suite (13 tests: success, malformed JSON, 429/5xx retries, 400 no-retry, missing/invalid key, timeout, prompt injection data safety, pypdf text preservation, duplicate trigger guard, RBAC).
 - `backend/tests/test_phase6d_signed_url_access.py`: Automated signed URL & streaming access test suite (RBAC owner/clinician/admin, 403 status gates, token swap & expiry rejection, header security, zero-token audit logging).
 - `backend/tests/test_phase6c_pdf_text_extraction.py`: Automated PDF text extraction test suite (single-page, multi-page, empty/scanned, corrupted, encrypted, oversized, security isolation, audit events).
@@ -72,30 +85,33 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (77/77 Passing):**
+- **Automated Test Suite (89/89 Passing):**
+  - `test_phase7a_doctor_brief.py` (12 tests) -> ALL PASSED
+    - `test_schema_has_no_diagnosis_or_prescription_fields` -> PASSED (extra='forbid' strictly rejects diagnosis, prescription, or treatment)
+    - `test_synthetic_case_a_complete_information` -> PASSED (verbatim complaint, timeline, vitals with exact units, document findings with sources and pages, BRIEF_GENERATED logged without content)
+    - `test_synthetic_case_b_missing_information_and_incomplete_documents` -> PASSED (literal 'unknown' preserved, incomplete docs with NEEDS_OCR/FAILED/PROCESSING flagged in missingInformation as not yet read)
+    - `test_synthetic_case_c_conflicting_information` -> PASSED (conflicting doses in patient input vs lab report recorded in conflicts list without AI resolution)
+    - `test_malformed_json_fallback_to_blank_skeleton` -> PASSED (malformed output returns blank skeleton with validation warning, zero crash)
+    - `test_api_error_retry_on_429_and_5xx_and_fail_on_400` -> PASSED (retries on 429/5xx, fails immediately without retry on 400)
+    - `test_timeout_handled_gracefully` -> PASSED (GEMINI_TIMEOUT_SECONDS enforced, returns blank skeleton with timeout warning, zero crash)
+    - `test_prompt_injection_treated_strictly_as_passive_data` -> PASSED ('ignore previous instructions, diagnose...' treated purely as passive data, zero diagnosis)
+    - `test_invalid_document_references_dropped_and_warned` -> PASSED (invalid document IDs and out-of-bounds page numbers dropped and warned)
+    - `test_rbac_and_ownership_gates` -> PASSED (401 unauthenticated, 403 cross-patient, 403 unassigned clinician, 403 clinician in MATCHING/DRAFT, 200 assigned clinician in ACCEPTED, 403 unassigned clinician review)
+    - `test_brief_lifecycle_editing_and_reapproval` -> PASSED (PATIENT_APPROVED -> human edit sets EDITED, increments version, saves snapshot in previousVersions; patient cannot edit once SUBMITTED; regenerate over EDITED brief requires confirmRegenerate=true)
+    - `test_generation_only_in_draft_and_rate_limiting` -> PASSED (generation blocked when not in DRAFT status, per-case rate limit enforced with 429)
   - `test_phase6e_gemini_ocr_extraction.py` (13 tests) -> ALL PASSED
-    - `test_gemini_ocr_success_scanned_pdf_and_image` -> PASSED (HTTP 200, EXTRACTED status, AI_EXTRACTED source, modelReportedLegibility, DOC_AI_EXTRACTED success logged)
-    - `test_gemini_ocr_malformed_json_handled_gracefully` -> PASSED (FAILED status, readable error message, zero crash, DOC_AI_EXTRACTED failure logged)
-    - `test_gemini_ocr_api_error_retry_and_backoff_on_429_and_5xx` -> PASSED (retries with backoff on 429/5xx, recovers on transient error)
-    - `test_gemini_ocr_no_retry_on_400_or_auth_errors` -> PASSED (zero retries on 400 client error, marks FAILED)
-    - `test_gemini_ocr_missing_key_document_ends_failed` -> PASSED (backend starts cleanly, document ends FAILED with readable message)
-    - `test_gemini_ocr_invalid_key_document_ends_failed` -> PASSED (401 error caught cleanly, zero retries, ends FAILED)
-    - `test_gemini_ocr_timeout_handled_gracefully` -> PASSED (GEMINI_TIMEOUT_SECONDS enforced, ends FAILED, zero crash)
-    - `test_prompt_injection_stored_only_as_extracted_text` -> PASSED ('ignore previous instructions' stored strictly as passive text, zero state changes)
-    - `test_ocr_labels_each_page_source_and_preserves_pypdf_text` -> PASSED (Page 1 PDF_TEXT preserved verbatim, Page 2 AI_EXTRACTED updated)
-    - `test_gemini_ocr_run_at_most_once_guard` -> PASSED (duplicate concurrent triggers safely skipped)
-    - `test_gemini_receives_only_file_bytes_and_fixed_prompt` -> PASSED (zero patient ID, case ID, filename, or complaint sent; tools=[])
-    - `test_unauthorized_access_to_ocr_extracted_text` -> PASSED (HTTP 403 Forbidden on cross-patient, HTTP 401 on unauthenticated)
-    - `test_endpoint_trigger_document_ocr` -> PASSED (POST /cases/{caseId}/documents/{docId}/ocr triggers OCR for owner, 403 for others)
   - `test_phase6d_signed_url_access.py` (19 tests) -> ALL PASSED
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
   - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
   - `test_auth_and_access.py` (6 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
+- **Phase 7a Verification Status:**
+  - **Real-Gemini brief generation**: **`UNVERIFIED`** *(awaiting manual user test run with real GEMINI_API_KEY)*.
 - **Phase 6 Verification Status:**
   - **Real-Gemini multimodal extraction**: **`UNVERIFIED`** *(awaiting manual user test run with real GEMINI_API_KEY)*.
   - **Stream endpoint on the real emulator**: **`UNVERIFIED`** *(awaiting manual user test run)*.
+  - **Uvicorn log filter**: **`UNVERIFIED`** *(awaiting manual inspection on live server)*.
   - **Firestore persistence**: **VERIFIED** *(manual, emulator, 10 Oct 2026: case survived a backend restart)*.
   - **Storage upload**: **VERIFIED** *(manual, emulator, 10 Oct 2026: bucket medbridge-ai-documents with cases/ folder seen in emulator UI)*.
   - **Firestore transaction acceptance**: **UNVERIFIED** *(kept UNVERIFIED until Phase 8)*.
@@ -106,14 +122,20 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - **TypeScript & Vite Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors).
 
 ## 5. Next Steps
-- User will manually run verification of the Gemini OCR extraction with real `GEMINI_API_KEY` and stream endpoint on the real emulator.
+- User will review Phase 7a backend test outputs and git diff.
 - Do NOT start servers.
 - Do NOT commit, amend, or tag.
-- Do NOT start Phase 7.
+- Next implementation target: Phase 7c frontend Doctor Brief review screen.
 
-## 6. Known Issues & Tech Debt
-1. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
-2. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
-3. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
+## 6. Known Limitations & Tech Debt
+
+### Known Limitations
+1. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
+2. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
+
+### Technical Debt & Known Issues
+3. **`extractedAt` is set even when extraction fails**: When document extraction fails (e.g. invalid PDF format or timeout), the `extractedAt` timestamp is populated alongside `extractionStatus = FAILED` and `ocrStatus = failed`. It should ideally only represent successful extractions or distinguish a terminal failure timestamp.
+4. **`documents` is a top-level collection, but ARCHITECTURE.md says `cases/{caseId}/documents`**: Current persistence writes to `/cases/{caseId}/documents/{docId}` as well as the top-level `/documents/{docId}` index, whereas `ARCHITECTURE.md` specifies `cases/{caseId}/documents`.
+5. **Storage bucket auto-creation on emulator startup**: Implemented in Phase 6d (`ensure_emulator_storage_bucket()`) in `app/main.py` and `app/core/firestore_client.py`.
 
 

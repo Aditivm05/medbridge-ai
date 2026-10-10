@@ -25,6 +25,7 @@ class CaseUpdate(BaseModel):
     duration: Optional[str] = Field(None, min_length=2, max_length=100)
     requestedUrgency: Optional[RequestedUrgency] = None
     patientLanguage: Optional[str] = Field(None, description="en | hi | mr")
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class CaseSubmitRequest(BaseModel):
