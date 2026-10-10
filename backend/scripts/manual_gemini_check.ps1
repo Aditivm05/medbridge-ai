@@ -194,10 +194,11 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
             $ocrRes = Invoke-RestMethod -Uri "$BackendUrl/api/v1/cases/$caseId/documents/$documentId/ocr" -Method Post -Headers $headers
             $ocrTriggered = $true
-            Write-Host "      -> Gemini OCR triggered successfully." -ForegroundColor Magenta
+            Write-Host "      -> Gemini OCR triggered successfully. Extraction status: $($ocrRes.extractionStatus)" -ForegroundColor Magenta
         }
         catch {
-            Write-Warning "Failed to trigger OCR: $_"
+            $errDetail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+            Write-Warning "Failed to trigger OCR: $errDetail"
         }
     }
 

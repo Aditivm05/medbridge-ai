@@ -34,18 +34,101 @@ export interface UserProfile {
   phone?: string;
 }
 
+export type BriefStatus = 'DRAFT_AI' | 'PATIENT_APPROVED' | 'CLINICIAN_REVIEWED' | 'EDITED';
+export type FactSource = 'PATIENT_REPORTED' | 'DOCUMENT_EXTRACTED';
+export type VitalSource = 'PATIENT_PROVIDED' | 'DEVICE_PROVIDED';
+export type ExtractionSource = 'PDF_TEXT' | 'AI_EXTRACTED';
+
+export interface SourceReference {
+  sourceType: FactSource | 'patient_input' | 'document';
+  reference?: string;
+  documentId?: string | null;
+  pageNumber?: number | null;
+  sourceId?: string;
+  referenceText?: string;
+}
+
+export interface SourcedFact {
+  fact: string;
+  source: FactSource;
+  reference: string;
+}
+
+export interface VitalFinding {
+  name: string;
+  value: string;
+  unit: string;
+  source: VitalSource;
+  reference: string;
+}
+
+export interface DocumentFinding {
+  documentId: string;
+  pageNumber: number;
+  extractionSource: ExtractionSource;
+  finding: string;
+  value?: string | null;
+  unit?: string | null;
+  reference: string;
+}
+
+export interface ClinicalConflict {
+  item: string;
+  valueA: string;
+  sourceA: string;
+  valueB: string;
+  sourceB: string;
+  description?: string | null;
+}
+
+export interface DoctorBrief {
+  briefId: string;
+  caseId: string;
+  schemaVersion: string;
+  version: number;
+  briefStatus: BriefStatus;
+  reasonForConsultation: string;
+  timelineAndDetails?: string | null;
+  relevantHistory: SourcedFact[];
+  currentMedications: SourcedFact[];
+  patientReportedAllergies: SourcedFact[];
+  vitals: VitalFinding[];
+  documentFindings: DocumentFinding[];
+  conflicts: ClinicalConflict[];
+  missingInformation: string[];
+  clarificationQuestions: string[];
+  sourceReferences: SourceReference[];
+  validationWarnings?: string[];
+  disclaimer: string;
+  createdAt: string;
+  updatedAt: string;
+  lastEditedBy?: string | null;
+  lastEditedAt?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  previousVersions?: any[];
+}
+
+export interface DoctorBriefEditRequest {
+  timelineAndDetails?: string;
+  relevantHistory?: SourcedFact[];
+  currentMedications?: SourcedFact[];
+  patientReportedAllergies?: SourcedFact[];
+  vitals?: VitalFinding[];
+  documentFindings?: DocumentFinding[];
+  conflicts?: ClinicalConflict[];
+  missingInformation?: string[];
+  clarificationQuestions?: string[];
+  sourceReferences?: SourceReference[];
+}
+
 export interface ExtractedClinicalFact {
   fact: string;
   value: string;
   unit?: string | null;
   sourceDocumentId: string;
-  pageNumber?: number | null;
-}
-
-export interface SourceReference {
-  sourceType: 'patient_input' | 'document';
-  sourceId: string;
-  referenceText: string;
   pageNumber?: number | null;
 }
 
@@ -136,6 +219,7 @@ export interface CaseData {
   documentCount: number;
   doctorBriefId?: string | null;
   doctorBrief?: DoctorBriefData | null;
+  realDoctorBrief?: DoctorBrief | null;
   documents?: DocumentData[];
   consultationId?: string | null;
   consultation?: ConsultationData | null;

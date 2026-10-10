@@ -151,11 +151,13 @@ def review_doctor_brief_clinician(
     - Only allowed when case is ACCEPTED, IN_CONSULTATION, or COMPLETED.
     - Transitions briefStatus to CLINICIAN_REVIEWED.
     """
+    clinician_notes = req.clinicianNotes if req else None
     try:
         return brief_service.review_brief_clinician(
             case_id=case_id,
             actor_id=current_user.uid,
             actor_role=current_user.role,
+            clinician_notes=clinician_notes,
         )
     except CaseNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -163,3 +165,5 @@ def review_doctor_brief_clinician(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BriefAccessForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BriefUpdateNotAllowedError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -600,11 +600,13 @@ class BriefService:
         case_id: str,
         actor_id: str,
         actor_role: str,
+        clinician_notes: Optional[str] = None,
     ) -> DoctorBrief:
         """
         Clinician review gate for the brief.
         Restricted to the assigned verified clinician when case is ACCEPTED, IN_CONSULTATION, or COMPLETED.
         Transitions briefStatus to CLINICIAN_REVIEWED.
+        Prevents duplicate review transitions to preserve immutable audit trail.
         """
         with self._lock:
             case = case_service.get_case(case_id)
@@ -622,6 +624,9 @@ class BriefService:
             if not brief:
                 raise BriefNotFoundError(f"Doctor brief not found for case {case_id}")
 
+            if brief.briefStatus == BriefStatus.CLINICIAN_REVIEWED:
+                raise BriefUpdateNotAllowedError("Brief has already been reviewed by a clinician.")
+
             now = datetime.utcnow()
             brief.briefStatus = BriefStatus.CLINICIAN_REVIEWED
             brief.reviewedBy = actor_id
@@ -629,16 +634,20 @@ class BriefService:
             brief.updatedAt = now
             self._save_brief(brief)
 
+            audit_details: Dict[str, Any] = {
+                "briefId": brief.briefId,
+                "version": brief.version,
+                "briefStatus": brief.briefStatus.value,
+            }
+            if clinician_notes:
+                audit_details["clinicianNotes"] = clinician_notes
+
             audit_service.log_event(
                 event_type=AuditEventType.BRIEF_CLINICIAN_REVIEWED,
                 actor_id=actor_id,
                 actor_role=actor_role,
                 case_id=case_id,
-                details={
-                    "briefId": brief.briefId,
-                    "version": brief.version,
-                    "briefStatus": brief.briefStatus.value,
-                },
+                details=audit_details,
             )
             return brief
 

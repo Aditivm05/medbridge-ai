@@ -1,4 +1,5 @@
 import { authService } from './authService';
+import { DoctorBrief, DoctorBriefEditRequest } from '../types';
 
 const API_BASE_URL = 'http://127.0.0.1:8000/api/v1';
 
@@ -66,6 +67,84 @@ export const api = {
     if (!res.ok) {
       const err = await res.json();
       throw new Error(`HTTP ${res.status}: ${err.detail}`);
+    }
+    return res.json();
+  },
+
+  // Doctor Brief Endpoints
+  generateBrief: async (caseId: string, confirmRegenerate: boolean = false): Promise<DoctorBrief> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/brief/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmRegenerate }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  getBrief: async (caseId: string): Promise<DoctorBrief> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/brief`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  updateBrief: async (caseId: string, payload: DoctorBriefEditRequest): Promise<DoctorBrief> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/brief`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  approveBrief: async (caseId: string, notes?: string): Promise<DoctorBrief> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/brief/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  reviewBrief: async (caseId: string, clinicianNotes?: string): Promise<DoctorBrief> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/brief/review`, {
+      method: 'POST',
+      body: JSON.stringify({ clinicianNotes }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
     }
     return res.json();
   },
