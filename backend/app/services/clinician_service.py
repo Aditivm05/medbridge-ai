@@ -10,8 +10,9 @@ import threading
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
+from fastapi import HTTPException, status
 
-from app.core.firestore_client import get_firestore_client
+from app.core.firestore_client import get_firestore_client, firestore_transactional
 from app.core.state_machine import CaseStatus
 from app.schemas.audit import AuditEventType
 from app.schemas.case import CaseResponse, RequestedUrgency
@@ -147,6 +148,23 @@ class ClinicianService:
 
                 profile = ClinicianProfile.model_validate(item)
                 doc_ref = self.db.collection("clinicians").document(clinician_id)
+                # If clinician already exists with an active assignment, preserve it
+                existing_snap = doc_ref.get()
+                if existing_snap.exists:
+                    existing_data = existing_snap.to_dict() or {}
+                    existing_case = existing_data.get("currentCaseId")
+                    if existing_case:
+                        c_snap = self.db.collection("cases").document(existing_case).get()
+                        if c_snap.exists and (c_snap.to_dict() or {}).get("status") in (
+                            CaseStatus.ACCEPTED.value,
+                            CaseStatus.IN_CONSULTATION.value,
+                        ):
+                            profile = profile.model_copy(
+                                update={
+                                    "currentCaseId": existing_case,
+                                    "availability": ClinicianAvailability.BUSY,
+                                }
+                            )
                 doc_ref.set(clinician_to_firestore_dict(profile))
                 seeded.append(profile)
 
@@ -200,23 +218,72 @@ class ClinicianService:
         profiles.sort(key=lambda p: p.clinicianId)
         return profiles
 
+    def _clinician_has_active_assignment(self, clinician_id: str, current_case_id: Optional[str] = None) -> bool:
+        """Checks whether a clinician currently has an active case assignment (ACCEPTED or IN_CONSULTATION)."""
+        if current_case_id:
+            snap = self.db.collection("cases").document(current_case_id).get()
+            if snap.exists:
+                st = (snap.to_dict() or {}).get("status")
+                if st in (CaseStatus.ACCEPTED.value, CaseStatus.IN_CONSULTATION.value):
+                    return True
+        try:
+            query = self.db.collection("cases").where("assignedClinicianId", "==", clinician_id)
+            for snap in query.stream():
+                st = (snap.to_dict() or {}).get("status")
+                if st in (CaseStatus.ACCEPTED.value, CaseStatus.IN_CONSULTATION.value):
+                    return True
+        except Exception as e:
+            logger.warning(f"Error checking active assignments for clinician '{clinician_id}': {e}")
+        return False
+
     def update_availability(
         self,
         clinician_id: str,
         availability: ClinicianAvailability,
         current_case_id: Optional[str] = None,
     ) -> ClinicianProfile:
-        """Updates availability and assigned currentCaseId for a clinician."""
-        with self._lock:
-            clinician = self.get_clinician(clinician_id)
-            updated = clinician.model_copy(
-                update={
-                    "availability": availability,
-                    "currentCaseId": current_case_id,
-                }
-            )
-            self.db.collection("clinicians").document(clinician_id).set(clinician_to_firestore_dict(updated))
-            return updated
+        """
+        Updates availability and assigned currentCaseId for a clinician.
+        Protected by Firestore transaction to ensure atomic coordination with case acceptance and completion.
+        Invariants:
+        1. Cannot set availability to AVAILABLE while an active case assignment exists.
+        2. Cannot clear or overwrite currentCaseId while the clinician has an active case assignment.
+        """
+        @firestore_transactional(self.db)
+        def _tx_update_avail(tx):
+            clin_ref = self.db.collection("clinicians").document(clinician_id)
+            snap = clin_ref.get(transaction=tx)
+            if not snap.exists:
+                raise ClinicianNotFoundError(f"Clinician '{clinician_id}' not found.")
+            data = snap.to_dict() or {}
+            existing_case_id = data.get("currentCaseId")
+
+            has_active = self._clinician_has_active_assignment(clinician_id, existing_case_id)
+
+            avail_val = availability.value if hasattr(availability, "value") else str(availability)
+            if avail_val == ClinicianAvailability.AVAILABLE.value and has_active:
+                active_case_str = existing_case_id or "an active case"
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot set clinician '{clinician_id}' to AVAILABLE while assigned to active case '{active_case_str}'. The active case must be completed first.",
+                )
+
+            # Prevent ordinary availability updates from wiping out an active assignment
+            target_case_id = current_case_id
+            if has_active and target_case_id is None and existing_case_id:
+                target_case_id = existing_case_id
+
+            now = datetime.utcnow()
+            update_data = {
+                "availability": avail_val,
+                "currentCaseId": target_case_id,
+                "updatedAt": now.isoformat(),
+            }
+            tx.update(clin_ref, update_data)
+            merged = dict(data, **update_data)
+            return clinician_from_firestore_dict(clinician_id, merged)
+
+        return _tx_update_avail()
 
     def find_matching_clinicians(
         self,

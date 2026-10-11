@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import logging
+import time
 from typing import Dict, Any, Optional, List, Callable
 from app.core.config import settings
 
@@ -286,16 +287,24 @@ class FakeFirestoreClient:
 def firestore_transactional(client):
     """
     Unified transaction decorator.
-    For FakeFirestoreClient: runs func(tx) and commits tx atomically with conflict detection.
+    For FakeFirestoreClient: runs func(tx) and commits tx atomically with optimistic concurrency conflict detection and retries (mirroring real Firestore).
     For google.cloud.firestore: delegates to firestore.transactional runner.
     """
     def decorator(func: Callable):
         def wrapper(*args, **kwargs):
             if hasattr(client, "is_fake") and client.is_fake:
-                tx = client.transaction()
-                res = func(tx, *args, **kwargs)
-                tx.commit()
-                return res
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    tx = client.transaction()
+                    try:
+                        res = func(tx, *args, **kwargs)
+                        tx.commit()
+                        return res
+                    except Exception as e:
+                        if "Firestore Concurrency Conflict" in str(e) and attempt < max_attempts - 1:
+                            time.sleep(0.01 * (attempt + 1))
+                            continue
+                        raise
             else:
                 from google.cloud import firestore
                 tx = client.transaction()

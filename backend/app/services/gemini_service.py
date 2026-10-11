@@ -57,7 +57,7 @@ class GeminiOcrService:
         try:
             return genai.Client(api_key=api_key.strip())
         except Exception as e:
-            logger.error("Failed to initialize Gemini client: %s", str(e))
+            logger.error("Failed to initialize Gemini client: %s", type(e).__name__)
             return None
 
     def set_client_for_testing(self, client: Optional[genai.Client]) -> None:
@@ -87,6 +87,13 @@ class GeminiOcrService:
                 False,
                 None,
                 "Gemini API key is not configured or invalid. OCR extraction cannot proceed.",
+            )
+
+        if not getattr(settings, "ALLOW_REMOTE_OCR", True):
+            return (
+                False,
+                None,
+                "Remote OCR is disabled by policy. Document requires manual clinician review.",
             )
 
         timeout = timeout_seconds if timeout_seconds is not None else float(settings.GEMINI_TIMEOUT_SECONDS)
@@ -134,11 +141,11 @@ class GeminiOcrService:
                 try:
                     extraction = OcrStructuredExtraction.model_validate_json(raw_text)
                 except (ValidationError, json.JSONDecodeError, ValueError) as val_err:
-                    logger.warning("Malformed JSON structured output from Gemini OCR: %s", str(val_err))
+                    logger.warning("Malformed JSON structured output from Gemini OCR (type=%s)", type(val_err).__name__)
                     return (
                         False,
                         None,
-                        f"Malformed structured JSON output from Gemini OCR: {str(val_err)}",
+                        f"Malformed structured JSON output from Gemini OCR ({type(val_err).__name__}).",
                     )
 
                 # Success: Log ONLY status and counts (NEVER response text or keys)
@@ -157,13 +164,12 @@ class GeminiOcrService:
 
             except APIError as api_err:
                 code = getattr(api_err, "code", None)
-                msg = getattr(api_err, "message", str(api_err))
                 # Check retryability: ONLY 429 and 5xx are retryable
                 is_retryable = False
                 if code == 429 or (code is not None and 500 <= code <= 599):
                     is_retryable = True
 
-                last_error_msg = f"Gemini API error ({code}): {msg}"
+                last_error_msg = f"Gemini API error ({code})"
                 logger.warning("Gemini APIError on attempt %d: code=%s, retryable=%s", attempt, code, is_retryable)
 
                 if is_retryable and attempt <= max_retries:
@@ -175,8 +181,8 @@ class GeminiOcrService:
                     break
 
             except Exception as e:
-                last_error_msg = f"Unexpected Gemini OCR error: {str(e)}"
-                logger.error("Unexpected error during Gemini OCR: %s", str(e))
+                last_error_msg = f"Unexpected Gemini OCR error: {type(e).__name__}"
+                logger.error("Unexpected error during Gemini OCR: %s", type(e).__name__)
                 break
 
         # If loop exited without returning, mark failed

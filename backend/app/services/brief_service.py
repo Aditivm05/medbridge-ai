@@ -39,6 +39,7 @@ from app.schemas.doctor_brief import (
 )
 from app.services.audit_service import audit_service
 from app.services.case_service import case_service
+from app.core.sanitization import sanitize_text, sanitize_clinical_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -143,15 +144,17 @@ class BriefService:
     def _prepare_sanitized_case_payload(self, case: CaseResponse, documents: List[DocumentResponse]) -> str:
         """
         Builds the prompt payload.
-        PRIVACY GUARANTEE: Sends only clinical case content.
+        PRIVACY GUARANTEE: Sends only clinical case content sanitized through centralized redaction.
         Never sends names, patient ID, filenames, or case ID.
         """
+        sanitized_complaint = sanitize_text(case.chiefComplaint)
+        sanitized_duration = sanitize_text(case.duration)
         sections = [
             "### PATIENT REPORTED INTAKE DATA (Source: PATIENT_REPORTED)",
-            f"- Reason / Chief Complaint (reference: chiefComplaint): {case.chiefComplaint}",
-            f"- Symptom Duration / Timeline (reference: duration): {case.duration}",
+            f"- Reason / Chief Complaint (reference: chiefComplaint): {sanitized_complaint}",
+            f"- Symptom Duration / Timeline (reference: duration): {sanitized_duration}",
         ]
-        meta = case.metadata or {}
+        meta = sanitize_clinical_metadata(case.metadata or {})
         if meta.get("symptoms"):
             symptoms_str = ", ".join(meta["symptoms"]) if isinstance(meta["symptoms"], list) else str(meta["symptoms"])
             sections.append(f"- Reported Symptoms (reference: intake:symptoms): {symptoms_str}")
@@ -173,7 +176,7 @@ class BriefService:
                     sections.append(
                         f"\n--- Document ID: {doc.documentId} | Page: {page.pageNumber} | Extraction Source: {page.source} ---"
                     )
-                    sections.append(page.text or "(no text on page)")
+                    sections.append(sanitize_text(page.text) or "(no text on page)")
 
         if extracted_doc_count == 0:
             sections.append("(No extracted document text available)")
@@ -233,8 +236,8 @@ class BriefService:
                     raw_data = json.loads(response.text)
                     brief_output = GeminiDoctorBriefOutput.model_validate(raw_data)
                 except Exception as val_err:
-                    last_error_msg = f"Malformed structured JSON from Gemini: {str(val_err)}"
-                    logger.warning("Malformed structured JSON from Gemini: %s", str(val_err))
+                    last_error_msg = f"Malformed structured JSON from Gemini ({type(val_err).__name__})"
+                    logger.warning("Malformed structured JSON from Gemini (type=%s)", type(val_err).__name__)
                     # Malformed JSON is not retryable
                     return (False, None, last_error_msg)
 
@@ -258,7 +261,7 @@ class BriefService:
             except APIError as api_err:
                 code = getattr(api_err, "code", None)
                 is_retryable = code in (429, 500, 502, 503, 504)
-                last_error_msg = f"Gemini APIError (code={code}): {api_err.message if hasattr(api_err, 'message') else str(api_err)}"
+                last_error_msg = f"Gemini APIError (code={code})"
                 logger.warning("Gemini APIError on attempt %d: code=%s, retryable=%s", attempt, code, is_retryable)
                 if is_retryable and attempt < max_retries:
                     time.sleep(backoff_delays[attempt - 1])
@@ -266,8 +269,8 @@ class BriefService:
                 return (False, None, last_error_msg)
 
             except Exception as e:
-                last_error_msg = f"Unexpected error during Gemini Doctor Brief generation: {str(e)}"
-                logger.error("Unexpected error during Gemini brief generation: %s", str(e))
+                last_error_msg = f"Unexpected error during Gemini Doctor Brief generation ({type(e).__name__})"
+                logger.error("Unexpected error during Gemini brief generation: %s", type(e).__name__)
                 return (False, None, last_error_msg)
 
         logger.info("Gemini Doctor Brief generation failed: status=FAILED, reason=%s", last_error_msg)
@@ -348,6 +351,10 @@ class BriefService:
         """
         with self._lock:
             case = case_service.get_case(case_id)
+            if actor_role != "admin":
+                if actor_role != "patient" or case.patientId != actor_id:
+                    raise BriefAccessForbiddenError("Forbidden: Only the owning patient can generate a Doctor Brief for this case.")
+
             if case.status != CaseStatus.DRAFT:
                 raise BriefGenerationError("Brief generation is only allowed while case is in DRAFT status.")
 

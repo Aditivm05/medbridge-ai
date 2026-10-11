@@ -255,6 +255,23 @@ def require_verified_clinician(user: AuthenticatedUser = Depends(get_current_use
     return user
 
 
+def require_verified_clinician_or_admin(user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:
+    """Dependency that enforces verified clinician status or admin for clinical coordination actions."""
+    if user.role == "admin":
+        return user
+    if user.role == "clinician":
+        if not user.is_verified_clinician:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Only verified clinicians with validated medical licenses can accept cases or access clinical workspaces.",
+            )
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Forbidden: Clinician or admin role required. Current role is '{user.role}'.",
+    )
+
+
 def check_case_ownership(case_patient_id: str, current_user: AuthenticatedUser) -> None:
     """
     Ownership check:

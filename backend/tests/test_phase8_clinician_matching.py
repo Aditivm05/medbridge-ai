@@ -53,11 +53,17 @@ TOKEN_DOC_PATIL = "Bearer mock-token-demo_doc_patil"
 TOKEN_DOC_DESHMUKH = "Bearer mock-token-demo_doc_deshmukh"
 TOKEN_DOC_PENDING = "Bearer mock-token-demo_doc_pending"
 TOKEN_DOC_OFFLINE = "Bearer mock-token-demo_doc_offline"
+TOKEN_ADMIN = "Bearer mock-token-admin"
 
 
 @pytest.fixture(autouse=True)
 def reset_demo_clinicians():
     """Resets the demo clinicians into Firestore before each test."""
+    db = clinician_service.db
+    if hasattr(db, "is_fake") and db.is_fake:
+        for k in list(db._store.keys()):
+            if k.startswith("cases/") or k.startswith("consultations/") or k.startswith("follow_ups/"):
+                del db._store[k]
     clinician_service.seed_default_clinicians()
 
 
@@ -118,12 +124,17 @@ def test_seeded_demo_clinicians_have_explicit_demo_labels():
 
 
 def test_seed_endpoint_is_idempotent():
-    """Requirement 1: Calling POST /clinicians/seed multiple times is safe and idempotent."""
-    res1 = client.post("/api/v1/clinicians/seed", headers={"Authorization": TOKEN_PATIENT})
+    """Requirement 1: Calling POST /clinicians/seed multiple times is safe and idempotent, restricted to admin."""
+    # Patient caller is rejected with 403 Forbidden
+    patient_res = client.post("/api/v1/clinicians/seed", headers={"Authorization": TOKEN_PATIENT})
+    assert patient_res.status_code == 403
+
+    # Admin caller succeeds and is idempotent
+    res1 = client.post("/api/v1/clinicians/seed", headers={"Authorization": TOKEN_ADMIN})
     assert res1.status_code == 200
     count1 = len(res1.json())
 
-    res2 = client.post("/api/v1/clinicians/seed", headers={"Authorization": TOKEN_PATIENT})
+    res2 = client.post("/api/v1/clinicians/seed", headers={"Authorization": TOKEN_ADMIN})
     assert res2.status_code == 200
     count2 = len(res2.json())
 

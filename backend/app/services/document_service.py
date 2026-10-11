@@ -37,6 +37,7 @@ from app.schemas.document import (
 from app.schemas.audit import AuditEventType
 from app.services.audit_service import audit_service
 from app.services.gemini_service import gemini_ocr_service
+from app.core.sanitization import sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +475,38 @@ class DocumentService:
                 self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(doc_dict)
                 self.db.collection("documents").document(document_id).set(doc_dict)
 
+            if not getattr(settings, "ALLOW_REMOTE_OCR", True):
+                fail_msg = "Remote OCR is disabled by policy. Document requires manual clinician review."
+                now = datetime.utcnow()
+                failed_doc = doc.model_copy(
+                    update={
+                        "extractionStatus": ExtractionStatus.FAILED,
+                        "ocrStatus": "failed",
+                        "pages": [],
+                        "extractedText": None,
+                        "pageCount": None,
+                        "errorMessage": fail_msg,
+                        "extractedAt": now,
+                    }
+                )
+                with self._lock:
+                    self.db.collection("cases").document(target_case_id).collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+                    self.db.collection("documents").document(document_id).set(document_to_firestore_dict(failed_doc))
+
+                audit_service.log_event(
+                    event_type=AuditEventType.DOC_AI_EXTRACTED,
+                    actor_id=actor_id or "system",
+                    actor_role=actor_role or "system",
+                    case_id=target_case_id,
+                    details={
+                        "documentId": document_id,
+                        "status": "failed",
+                        "reason": fail_msg,
+                        "extractionSource": "AI_EXTRACTED",
+                    },
+                )
+                return failed_doc
+
             # 2. Retrieve file bytes if not supplied
             if file_bytes is None:
                 try:
@@ -481,7 +514,7 @@ class DocumentService:
                     blob = bucket.blob(doc.storagePath)
                     file_bytes = blob.download_as_bytes()
                 except Exception as e:
-                    logger.error(f"Could not download blob '{doc.storagePath}' for OCR: {e}")
+                    logger.error("Could not download blob '%s' for OCR: %s", doc.storagePath, type(e).__name__)
                     file_bytes = b""
 
             if not file_bytes:
@@ -554,10 +587,10 @@ class DocumentService:
                 )
                 return failed_doc
 
-            # 4. Merge pages: preserve original pypdf text for pages that had text!
+            # 4. Merge pages: preserve original pypdf text for pages that had text, sanitize OCR text
             existing_pages = doc.pages or []
             updated_pages: List[PageText] = []
-            ocr_pages_map = {p.pageNumber: p.text for p in extraction.pages}
+            ocr_pages_map = {p.pageNumber: sanitize_text(p.text) for p in extraction.pages}
 
             if existing_pages:
                 for ep in existing_pages:
@@ -577,11 +610,12 @@ class DocumentService:
                         )
             else:
                 for ocr_p in extraction.pages:
+                    sanitized_p_text = sanitize_text(ocr_p.text)
                     updated_pages.append(
                         PageText(
                             pageNumber=ocr_p.pageNumber,
-                            text=ocr_p.text,
-                            charCount=len(ocr_p.text),
+                            text=sanitized_p_text,
+                            charCount=len(sanitized_p_text),
                             status=ExtractionStatus.EXTRACTED,
                             source="AI_EXTRACTED",
                         )
@@ -594,6 +628,11 @@ class DocumentService:
             ]
             full_text = "\n\n".join(full_text_parts) if full_text_parts else None
 
+            sanitized_fields = [
+                f.model_copy(update={"value": sanitize_text(f.value)})
+                for f in extraction.fields
+            ]
+
             completed_doc = doc.model_copy(
                 update={
                     "extractionStatus": ExtractionStatus.EXTRACTED,
@@ -602,7 +641,7 @@ class DocumentService:
                     "requiresHumanReview": True,
                     "pages": updated_pages,
                     "pageCount": len(updated_pages),
-                    "extractedFields": extraction.fields,
+                    "extractedFields": sanitized_fields,
                     "extractedText": full_text,
                     "errorMessage": None,
                     "extractedAt": now,

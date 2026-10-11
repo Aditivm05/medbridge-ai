@@ -6,7 +6,7 @@ Manages clinician profiles, demo seeding, availability updates, and matching que
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
-from app.core.auth import get_current_user, require_verified_clinician, AuthenticatedUser
+from app.core.auth import get_current_user, require_role, require_verified_clinician, AuthenticatedUser
 from app.schemas.clinician import (
     ClinicianProfile,
     ClinicianSpecialty,
@@ -26,11 +26,11 @@ router = APIRouter(prefix="/clinicians", tags=["clinicians"])
 
 @router.post("/seed", response_model=List[ClinicianProfile])
 def seed_demo_clinicians(
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_role(["admin"])),
 ):
     """
     Seeds labelled [DEMO / SIMULATED] clinicians into Firestore.
-    Idempotent operation.
+    Restricted to administrator callers. Idempotent operation.
     """
     return clinician_service.seed_default_clinicians()
 

@@ -61,15 +61,14 @@ def list_cases(
     """
     Lists cases based on role and ownership:
     - Patients ONLY see their own cases.
-    - Clinicians see cases assigned to them or query filters.
-    - Admins see all cases.
+    - Clinicians see cases assigned to them.
+    - Admins see all cases or query filters.
     """
     if current_user.role == "patient":
         return case_service.list_cases(patient_id=current_user.uid)
 
     if current_user.role == "clinician":
-        target_clinician = clinicianId or current_user.uid
-        return case_service.list_cases(patient_id=patientId, clinician_id=target_clinician)
+        return case_service.list_cases(clinician_id=current_user.uid)
 
     return case_service.list_cases(patient_id=patientId, clinician_id=clinicianId)
 
@@ -91,23 +90,39 @@ def get_case(
     Fetches a case by ID.
     Enforces ownership:
     - Patients CANNOT view another patient's case (HTTP 403 Forbidden).
-    - Clinicians can view matching pool cases or cases assigned to them.
+    - Clinicians can ONLY view cases in MATCHING status or cases assigned to them.
+    - Admins can view all cases.
     """
     try:
         case = case_service.get_case(case_id)
     except CaseNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    check_case_ownership(case.patientId, current_user)
+    if current_user.role == "admin":
+        return case
 
-    if current_user.role == "clinician":
-        if case.status != CaseStatus.MATCHING and case.assignedClinicianId and case.assignedClinicianId != current_user.uid:
+    if current_user.role == "patient":
+        if case.patientId != current_user.uid:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Forbidden: Case is assigned to another clinician.",
+                detail="Forbidden: Patients can only access their own medical cases.",
             )
+        return case
 
-    return case
+    if current_user.role == "clinician":
+        is_assigned = bool(case.assignedClinicianId and case.assignedClinicianId == current_user.uid)
+        is_matching = case.status == CaseStatus.MATCHING
+        if not (is_assigned or is_matching):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Clinicians can only view cases in the MATCHING pool or cases assigned to them.",
+            )
+        return case
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Forbidden: Role '{current_user.role}' is not authorized to access cases.",
+    )
 
 
 @router.patch("/{case_id}", response_model=CaseResponse)

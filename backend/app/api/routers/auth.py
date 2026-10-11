@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 from app.core.config import settings
 from app.core.auth import (
     get_current_user,
+    require_role,
     set_user_custom_claims,
     AuthenticatedUser,
 )
@@ -35,23 +36,12 @@ def get_my_profile(current_user: AuthenticatedUser = Depends(get_current_user)):
 @router.post("/claims")
 def update_user_claims(
     req: SetClaimsRequest,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_role(["admin"])),
 ):
     """
     Sets custom claims (role and clinician verification).
-    RESTRICTION: Admin-only in production, or allowed when running under the Firebase Auth emulator.
+    RESTRICTION: Restricted to administrators.
     """
-    is_emulator = bool(
-        os.getenv("FIREBASE_AUTH_EMULATOR_HOST")
-        or settings.FIREBASE_AUTH_EMULATOR_HOST
-    )
-    is_admin = current_user.role == "admin"
-
-    if not is_admin and not is_emulator:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Updating custom claims requires admin privileges or an active emulator environment.",
-        )
 
     updated = set_user_custom_claims(
         uid=req.uid,

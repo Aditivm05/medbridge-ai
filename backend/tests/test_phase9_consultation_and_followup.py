@@ -47,7 +47,12 @@ TOKEN_DOC_PENDING = "Bearer mock-token-demo_doc_pending"
 
 @pytest.fixture(autouse=True)
 def reset_demo_clinicians():
-    """Resets the demo clinicians into Firestore before each test."""
+    """Resets the demo clinicians and case state into Firestore before each test."""
+    db = clinician_service.db
+    if hasattr(db, "is_fake") and db.is_fake:
+        for k in list(db._store.keys()):
+            if k.startswith("cases/") or k.startswith("consultations/") or k.startswith("follow_ups/"):
+                del db._store[k]
     clinician_service.seed_default_clinicians()
 
 

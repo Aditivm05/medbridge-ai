@@ -22,7 +22,7 @@ from app.services.brief_service import (
     BriefRateLimitError,
     BriefAccessForbiddenError,
 )
-from app.services.case_service import CaseNotFoundError
+from app.services.case_service import case_service, CaseNotFoundError
 
 router = APIRouter(prefix="/cases", tags=["doctor-brief"])
 
@@ -42,6 +42,18 @@ def generate_doctor_brief(
     """
     confirm_regenerate = req.confirmRegenerate if req else False
     try:
+        case = case_service.get_case(case_id)
+    except CaseNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    if current_user.role != "admin":
+        if current_user.role != "patient" or case.patientId != current_user.uid:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Only the owning patient can generate a Doctor Brief for this case.",
+            )
+
+    try:
         brief, _ = brief_service.generate_brief(
             case_id=case_id,
             actor_id=current_user.uid,
@@ -49,14 +61,14 @@ def generate_doctor_brief(
             confirm_regenerate=confirm_regenerate,
         )
         return brief
-    except CaseNotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BriefAccessForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except BriefRateLimitError as e:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
     except (BriefGenerationError, BriefEditConflictError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_TIMEOUT_SECONDS: int = 60
+    ALLOW_REMOTE_OCR: bool = True
     
     # Firebase / Google Cloud configuration
     FIREBASE_PROJECT_ID: str = "demo-medbridge"

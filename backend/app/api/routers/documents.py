@@ -17,6 +17,7 @@ from app.schemas.document import (
     validate_magic_bytes,
 )
 from app.schemas.audit import AuditEventType
+from app.schemas.case import CaseResponse
 from app.core.state_machine import CaseStatus
 from app.services.audit_service import audit_service
 from app.services.case_service import case_service, CaseNotFoundError
@@ -29,6 +30,60 @@ router = APIRouter(prefix="/cases/{case_id}/documents", tags=["documents"])
 
 # In-memory document registry for local baseline testing
 _documents_store = document_service._documents
+
+
+def _authorize_document_access(case: CaseResponse, current_user: AuthenticatedUser) -> None:
+    """
+    Strict document access gate:
+    - Admin: always permitted.
+    - Patient: permitted ONLY for their own cases (case.patientId == current_user.uid).
+    - Clinician: permitted ONLY if verified, assigned to the case, and case is in
+      ACCEPTED, IN_CONSULTATION, or COMPLETED status.
+    - Denies all other access with HTTP 403 Forbidden.
+    """
+    if current_user.role == "admin":
+        return
+    if current_user.role == "patient":
+        if current_user.uid == case.patientId:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Patients can only access their own medical cases.",
+        )
+    if current_user.role == "clinician":
+        if not current_user.is_verified_clinician:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Only verified clinicians with validated medical licenses may access clinical documents.",
+            )
+        if case.assignedClinicianId != current_user.uid:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Clinician is not assigned to this case.",
+            )
+        if case.status not in {CaseStatus.ACCEPTED, CaseStatus.IN_CONSULTATION, CaseStatus.COMPLETED}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Forbidden: Clinician document access not permitted when case status is '{case.status.value}' (requires ACCEPTED, IN_CONSULTATION, or COMPLETED).",
+            )
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Forbidden: Role '{current_user.role}' is not authorized to access documents.",
+    )
+
+
+def _authorize_document_upload(case: CaseResponse, current_user: AuthenticatedUser) -> None:
+    """
+    Restricts document uploads to the case patient owner while in DRAFT status, or admin.
+    """
+    if current_user.role != "admin":
+        if current_user.role != "patient" or case.patientId != current_user.uid:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Patients can only access their own medical cases.",
+            )
+
 
 
 @router.post("/upload-intent", response_model=DocumentUploadIntentResponse)
@@ -53,7 +108,7 @@ def request_upload_intent(
             detail=str(e),
         )
 
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_upload(case, current_user)
 
     # 1. Enforce 5 files per case limit
     if case.documentCount >= MAX_DOCUMENTS_PER_CASE:
@@ -128,7 +183,7 @@ async def upload_and_verify_document(
             detail=str(e),
         )
 
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_upload(case, current_user)
 
     # 1. Enforce 5 files per case limit
     if case.documentCount >= MAX_DOCUMENTS_PER_CASE:
@@ -261,7 +316,7 @@ def list_case_documents(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_access(case, current_user)
     return document_service.list_case_documents(case_id)
 
 
@@ -279,8 +334,8 @@ def get_case_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    check_case_ownership(case.patientId, current_user)
-    doc = document_service.get_document(document_id)
+    _authorize_document_access(case, current_user)
+    doc = document_service.get_document(document_id, case_id=case_id)
     if not doc or doc.caseId != case_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -307,9 +362,9 @@ def get_document_extracted_text(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_access(case, current_user)
 
-    doc = document_service.get_document(document_id)
+    doc = document_service.get_document(document_id, case_id=case_id)
     if not doc or doc.caseId != case_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -363,7 +418,7 @@ def trigger_document_ocr(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_access(case, current_user)
 
     doc = document_service.get_document(document_id, case_id=case_id)
     if not doc or doc.caseId != case_id:
@@ -397,9 +452,9 @@ def trigger_document_extraction(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
-    check_case_ownership(case.patientId, current_user)
+    _authorize_document_access(case, current_user)
 
-    doc = document_service.get_document(document_id)
+    doc = document_service.get_document(document_id, case_id=case_id)
     if not doc or doc.caseId != case_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

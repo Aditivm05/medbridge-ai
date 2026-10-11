@@ -3,7 +3,13 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user, require_verified_clinician, check_case_ownership, AuthenticatedUser
+from app.core.auth import (
+    get_current_user,
+    require_verified_clinician,
+    require_verified_clinician_or_admin,
+    check_case_ownership,
+    AuthenticatedUser,
+)
 from app.schemas.case import CaseResponse
 from app.schemas.consultation import (
     ConsultationCreate,
@@ -84,7 +90,7 @@ def get_consultation(
 def complete_case_and_followup(
     case_id: str,
     data: FollowUpCreate,
-    current_user: AuthenticatedUser = Depends(require_verified_clinician),
+    current_user: AuthenticatedUser = Depends(require_verified_clinician_or_admin),
 ):
     """
     Assigned verified clinician schedules patient follow-up and finalizes the coordination case.
