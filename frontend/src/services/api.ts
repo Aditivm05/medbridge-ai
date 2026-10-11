@@ -1,5 +1,5 @@
 import { authService } from './authService';
-import { DoctorBrief, DoctorBriefEditRequest } from '../types';
+import { DoctorBrief, DoctorBriefEditRequest, ClinicianMatchResponse } from '../types';
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/+$/, '');
 
@@ -201,7 +201,7 @@ export const api = {
     return res.json();
   },
 
-  matchCase: async (caseId: string) => {
+  matchCase: async (caseId: string): Promise<ClinicianMatchResponse> => {
     const res = await authenticatedFetch(`/cases/${caseId}/match`, {
       method: 'POST',
     });

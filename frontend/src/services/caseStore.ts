@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CaseData, DoctorBrief, DoctorBriefData, DoctorBriefEditRequest, DocumentData, FollowUpData, ScreenView } from '../types';
+import { CaseData, ClinicianMatchResponse, DoctorBrief, DoctorBriefData, DoctorBriefEditRequest, DocumentData, FollowUpData, ScreenView } from '../types';
 import { mockClinicians } from './mockData';
 import { api } from './api';
 
@@ -41,6 +41,7 @@ export function mapBackendCaseToCaseData(sc: any, existing?: CaseData): CaseData
         : new Date(sc.completedAt).toISOString()
       : existing?.completedAt ?? null,
     metadata: sc.metadata || existing?.metadata || {},
+    matchResult: sc.matchResult ?? existing?.matchResult ?? null,
   };
 }
 
@@ -284,13 +285,70 @@ class CaseStore {
   public async refreshCase(caseId: string): Promise<CaseData | null> {
     try {
       const serverCase = await api.getCase(caseId);
-      const updatedCase = mapBackendCaseToCaseData(serverCase);
+      const existing = this.cases.find((c) => c.caseId === caseId);
+      const updatedCase = mapBackendCaseToCaseData(serverCase, existing);
       this.cases = this.cases.map((c) => (c.caseId === caseId ? { ...c, ...updatedCase } : c));
       this.notify();
       return updatedCase;
     } catch {
       return null;
     }
+  }
+
+  public async submitAndMatchCase(
+    caseId: string
+  ): Promise<{ case: CaseData; matchResult: ClinicianMatchResponse }> {
+    let targetCase = this.cases.find((c) => c.caseId === caseId);
+    if (!targetCase) {
+      targetCase = (await this.refreshCase(caseId)) || undefined;
+    }
+
+    // Submit case if still in DRAFT
+    if (!targetCase || targetCase.status === 'DRAFT') {
+      await api.submitCase(caseId, targetCase?.idempotencyKey);
+    }
+
+    // Trigger authoritative backend clinician matching
+    const matchResult = await api.matchCase(caseId);
+
+    // Refresh case from backend to sync authoritative status and metadata
+    const updatedCase = await this.refreshCase(caseId);
+
+    this.cases = this.cases.map((c) => {
+      if (c.caseId === caseId) {
+        return {
+          ...c,
+          status: (matchResult.status as any) || c.status,
+          matchResult,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    this.notify();
+
+    return {
+      case: updatedCase || this.cases.find((c) => c.caseId === caseId)!,
+      matchResult,
+    };
+  }
+
+  public async matchCase(caseId: string): Promise<ClinicianMatchResponse> {
+    const matchResult = await api.matchCase(caseId);
+    await this.refreshCase(caseId);
+    this.cases = this.cases.map((c) => {
+      if (c.caseId === caseId) {
+        return {
+          ...c,
+          status: (matchResult.status as any) || c.status,
+          matchResult,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    this.notify();
+    return matchResult;
   }
 
   public patientReviewBrief(caseId: string, approve: boolean, corrections?: string): void {
@@ -309,7 +367,7 @@ class CaseStore {
 
         return {
           ...c,
-          status: 'MATCHING', // Enqueued into matching pool upon approval
+          status: approve ? 'MATCHING' : c.status,
           doctorBrief: updatedBrief,
           updatedAt: now,
         };
@@ -666,6 +724,8 @@ export function useCaseStore() {
       caseStore.updateDoctorBrief(caseId, payload),
     approveDoctorBrief: (caseId: string, notes?: string) =>
       caseStore.approveDoctorBrief(caseId, notes),
+    submitAndMatchCase: (caseId: string) => caseStore.submitAndMatchCase(caseId),
+    matchCase: (caseId: string) => caseStore.matchCase(caseId),
     refreshCase: (caseId: string) => caseStore.refreshCase(caseId),
     patientReviewBrief: (caseId: string, approve: boolean, corrections?: string) =>
       caseStore.patientReviewBrief(caseId, approve, corrections),

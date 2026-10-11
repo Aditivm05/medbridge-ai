@@ -578,6 +578,9 @@ class BriefService:
             if actor_role != "admin" and case.patientId != actor_id:
                 raise BriefAccessForbiddenError("Forbidden: Only the case owner can approve this brief.")
 
+            if actor_role == "patient" and case.status != CaseStatus.DRAFT:
+                raise BriefUpdateNotAllowedError("Patients cannot approve the brief after case submission.")
+
             brief = self.get_brief_optional(case_id)
             if not brief:
                 raise BriefNotFoundError(f"Doctor brief not found for case {case_id}")

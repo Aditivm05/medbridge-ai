@@ -230,6 +230,26 @@ export interface CaseData {
   acceptedAt?: string | null;
   completedAt?: string | null;
   metadata?: Record<string, any>;
+  matchResult?: ClinicianMatchResponse | null;
+}
+
+export interface ClinicianMatchItem {
+  clinicianId: string;
+  fullName: string;
+  licenseNumber: string;
+  specialty: string;
+  languages: string[];
+  matchScore: number;
+  isExactSpecialtyMatch: boolean;
+  availability: 'available' | 'busy' | 'offline';
+  isDemo: boolean;
+}
+
+export interface ClinicianMatchResponse {
+  caseId: string;
+  status: string;
+  matches: ClinicianMatchItem[];
+  matchedCount: number;
 }
 
 export interface ClinicianData {

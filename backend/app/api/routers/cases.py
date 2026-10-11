@@ -191,7 +191,12 @@ def submit_case(
     """
     try:
         case = case_service.get_case(case_id)
-        check_case_ownership(case.patientId, current_user)
+        if current_user.role != "admin":
+            if current_user.role != "patient" or case.patientId != current_user.uid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: Only the owning patient can submit this case.",
+                )
 
         idempotency_key = req.idempotencyKey if req else None
         return case_service.submit_case(
@@ -245,6 +250,17 @@ def match_case(
         case = case_service.get_case(case_id)
         if current_user.role == "patient":
             check_case_ownership(case.patientId, current_user)
+        elif current_user.role == "clinician":
+            if not current_user.is_verified_clinician:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: Only verified clinicians can query matching candidates.",
+                )
+        elif current_user.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Insufficient permissions to access matching.",
+            )
 
         return clinician_service.trigger_matching(
             case_id=case_id,

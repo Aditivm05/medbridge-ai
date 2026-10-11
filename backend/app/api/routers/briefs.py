@@ -147,7 +147,7 @@ def approve_doctor_brief_patient(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BriefNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except BriefAccessForbiddenError as e:
+    except (BriefAccessForbiddenError, BriefUpdateNotAllowedError) as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 

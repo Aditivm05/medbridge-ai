@@ -358,8 +358,8 @@ export function App() {
             currentCase={effectiveCase}
             language={language}
             onBack={() => navigateTo('upload', effectiveCase.caseId)}
+            onNavigateToDashboard={() => navigateTo('patient-dashboard')}
             onApproveAndEnqueue={() => {
-              patientReviewBrief(effectiveCase.caseId, true);
               authService.switchRole('clinician');
               navigateTo('clinician-dashboard', effectiveCase.caseId);
             }}
