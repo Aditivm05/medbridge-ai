@@ -37,9 +37,9 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Phase 9e**: Patient Case History & Follow-Up View: `PatientDashboard.tsx` and `FollowUpScreen.tsx` display completed cases with green completion badges, conclusion timestamps, recorded clinician consultation notes, and scheduled follow-up directives with read-only form controls. Cross-patient reads securely blocked (HTTP 403 Forbidden).
   - **Phase 9f**: Zero Fake Notifications: Confirmed zero fake notifications, mock toasts, or simulated SMS alerts across the entire workflow.
   - **Phase 9g**: Verification & Tests:
-    - 9 automated Phase 9 backend tests in `tests/test_phase9_consultation_and_followup.py` passing (130/130 full suite passing).
+    - 9 automated Phase 9 backend tests in `tests/test_phase9_consultation_and_followup.py` and production auth tests in `tests/test_auth_and_access.py` passing.
     - Frontend production build (`tsc && vite build`) passing with zero errors.
-    - Live end-to-end integration smoke test (`smoke_test_phase9.py`) executed against running FastAPI backend, Firebase emulators, and live Gemini AI (`gemini-3.8-flash`), verifying all 8 steps of the Golden Workflow.
+    - Live end-to-end integration smoke test (`smoke_test_phase9.py`) executed against running FastAPI backend, Firebase emulators, and live Gemini AI (`gemini-3.8-flash`), verifying all 8 steps of the Golden Workflow. Note: The Phase 9 smoke test uses mock-token auth, a stub PDF, and does not check brief content.
 
 ## 3. Files Created Across Phases 1 - 9
 ### Architecture, Docs & Infrastructure
@@ -114,7 +114,8 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `frontend/scripts/capture_phase4_screenshot.cjs`: Automated security verification script capturing browser rejection toasts for cross-patient access and unverified clinician claim.
 
 ## 4. Verified Milestones & Test Outputs
-- **Automated Test Suite (121/121 Passing):**
+- **Automated Test Suite (133/133 Passing):**
+  - `test_phase9_consultation_and_followup.py` (9 tests) -> ALL PASSED
   - `test_phase8_clinician_matching.py` (17 tests) -> ALL PASSED
     - `test_seeded_demo_clinicians_have_explicit_demo_labels` -> PASSED (explicit `[DEMO / SIMULATED]` labels, `isDemo: true`)
     - `test_seed_endpoint_is_idempotent` -> PASSED (re-running seed returns 200 without duplication)
@@ -140,8 +141,21 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - `test_phase6c_pdf_text_extraction.py` (11 tests) -> ALL PASSED
   - `test_phase6a_document_upload.py` (13 tests) -> ALL PASSED
   - `test_phase5_state_machine_and_crud.py` (9 tests) -> ALL PASSED
-  - `test_auth_and_access.py` (6 tests) -> ALL PASSED
+  - `test_auth_and_access.py` (9 tests) -> ALL PASSED
   - `test_case_flow.py` (6 tests) -> ALL PASSED
+
+- **Phase 9 Live Integration Smoke Test (11 Oct 2026 — VERIFIED):**
+  - **Environment**: FastAPI backend running on port 8000; Firebase Auth (9099), Firestore (8080), Storage (9199) emulators active; live Gemini API (`gemini-3.8-flash`).
+  - **Scope & Limitations**: The Phase 9 smoke test uses mock-token auth, a stub PDF, and does not check brief content.
+  - **Full Golden Workflow Executed (`backend/scripts/smoke_test_phase9.py`)**:
+    1. Patient submits intake request (DRAFT).
+    2. Document uploaded and verified (stub PDF with valid minimal structure).
+    3. AI Doctor Brief generated with Gemini.
+    4. Patient approves Doctor Brief (SUBMITTED -> MATCHING).
+    5. Seeded DEMO clinician (Dr. Rajesh Patil) accepts case (ACCEPTED).
+    6. Clinician reviews Doctor Brief and records consultation notes (IN_CONSULTATION).
+    7. Clinician schedules follow-up and completes case (COMPLETED, clinician released back to available).
+    8. Patient retrieves completed case history, consultation record, and follow-up directives.
 
 - **Phase 8 Live Integration Smoke Test (11 Oct 2026 — VERIFIED):**
   - **Environment**: FastAPI backend running on port 8000; Firebase Auth (9099), Firestore (8080), Storage (9199) emulators active.

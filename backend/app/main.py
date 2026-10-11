@@ -64,10 +64,17 @@ async def lifespan(app: FastAPI):
             logger.error("DOC_STREAM_SECRET is required outside testing environments.")
             raise RuntimeError("DOC_STREAM_SECRET environment variable is required outside testing environments.")
 
-    # 2. Startup: Ensure storage bucket exists on emulator if emulator host is set
+    # 2. Startup validation: Refuse to start if DEMO_AUTH_ENABLED is enabled when ENVIRONMENT=production
+    env = os.environ.get("ENVIRONMENT") or settings.ENVIRONMENT
+    demo_auth_on = getattr(settings, "DEMO_AUTH_ENABLED", False) or os.environ.get("DEMO_AUTH_ENABLED", "").lower() in ("true", "1")
+    if env.lower() == "production" and demo_auth_on:
+        logger.error("DEMO_AUTH_ENABLED cannot be enabled when ENVIRONMENT=production.")
+        raise RuntimeError("FATAL: DEMO_AUTH_ENABLED cannot be enabled when ENVIRONMENT=production.")
+
+    # 3. Startup: Ensure storage bucket exists on emulator if emulator host is set
     ensure_emulator_storage_bucket()
 
-    # 3. Startup: Seed demo clinicians into Firestore
+    # 4. Startup: Seed demo clinicians into Firestore
     try:
         from app.services.clinician_service import clinician_service
         clinician_service.seed_default_clinicians()

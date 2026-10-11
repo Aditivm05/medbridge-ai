@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     ENVIRONMENT: str = "development"
     PORT: int = 8000
+    DEMO_AUTH_ENABLED: bool = False
     
     # Gemini AI configuration
     GEMINI_API_KEY: Optional[str] = None

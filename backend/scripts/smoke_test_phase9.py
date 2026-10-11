@@ -1,8 +1,10 @@
 """
+SYNTHETIC DATA ONLY.
+
 Phase 9 Live Server Smoke Test: Full Golden Workflow
 Executes against the running server on http://127.0.0.1:8000 with Firebase Emulators:
 1. Patient submits intake request (DRAFT)
-2. Document uploaded and verified
+2. Document uploaded and verified (NOTE: The uploaded document is a stub PDF used for attachment and verification flow only; this script does not test OCR or check brief content)
 3. AI Doctor Brief generated with Gemini
 4. Patient approves Doctor Brief (SUBMITTED -> MATCHING)
 5. Seeded DEMO clinician (Dr. Rajesh Patil) accepts case (ACCEPTED)
@@ -49,8 +51,17 @@ def run_phase9_golden_workflow():
     case_id = case["caseId"]
     print(f"[OK] Step 1: Created Case {case_id} in status {case['status']}")
 
-    # 2. Attach Sample Medical Document
-    sample_txt = b"%PDF-1.4\n1 0 obj\n<< /Title (Ultrasound Pelvis) >>\nendobj\ntrailer\n<< >>\n%%EOF"
+    # 2. Attach Sample Medical Document (Valid minimal PDF with extractable text)
+    sample_txt = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+        b"5 0 obj\n<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 712 Td (Ultrasound Pelvis Normal) Tj ET\nendstream\nendobj\n"
+        b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000318 00000 n \n"
+        b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n412\n%%EOF\n"
+    )
     files = {"file": ("ultrasound_appendix.pdf", sample_txt, "application/pdf")}
     res2 = requests.post(
         f"{BASE_URL}/api/v1/cases/{case_id}/documents/upload-and-verify",

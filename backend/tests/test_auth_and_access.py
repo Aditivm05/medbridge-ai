@@ -178,3 +178,52 @@ def test_custom_claims_inspection_and_updates():
     )
     assert claims_res.status_code == 200
     assert claims_res.json()["status"] == "success"
+
+
+def test_mock_token_rejected_in_production(monkeypatch):
+    """With ENVIRONMENT=production, any mock token returns 401 Unauthorized even if DEMO_AUTH_ENABLED is set."""
+    from app.core.config import settings
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setenv("DEMO_AUTH_ENABLED", "true")
+    monkeypatch.setattr(settings, "DEMO_AUTH_ENABLED", True)
+    # Ensure TESTING env doesn't bypass production check
+    monkeypatch.delenv("TESTING", raising=False)
+
+    res = client.get("/api/v1/cases", headers={"Authorization": TOKEN_PATIENT_1})
+    assert res.status_code == 401
+    assert "disabled in this environment" in res.json()["detail"].lower()
+
+
+def test_mock_token_rejected_when_demo_auth_disabled_default(monkeypatch):
+    """When DEMO_AUTH_ENABLED is false (default) and TESTING is not set, mock token returns 401."""
+    from app.core.config import settings
+
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setenv("DEMO_AUTH_ENABLED", "false")
+    monkeypatch.setattr(settings, "DEMO_AUTH_ENABLED", False)
+    monkeypatch.delenv("TESTING", raising=False)
+
+    res = client.get("/api/v1/cases", headers={"Authorization": TOKEN_PATIENT_1})
+    assert res.status_code == 401
+    assert "disabled in this environment" in res.json()["detail"].lower()
+
+
+def test_backend_refuses_to_start_with_demo_auth_in_production(monkeypatch):
+    """Backend lifespan refuses to start when ENVIRONMENT=production and DEMO_AUTH_ENABLED=true."""
+    import asyncio
+    from app.core.config import settings
+    from app.main import lifespan, app
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setenv("DEMO_AUTH_ENABLED", "true")
+    monkeypatch.setattr(settings, "DEMO_AUTH_ENABLED", True)
+
+    with pytest.raises(RuntimeError, match="DEMO_AUTH_ENABLED cannot be enabled when ENVIRONMENT=production"):
+        async def run_ls():
+            async with lifespan(app):
+                pass
+        asyncio.run(run_ls())

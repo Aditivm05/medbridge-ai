@@ -79,6 +79,24 @@ def set_user_custom_claims(uid: str, role: str, is_verified_clinician: bool = Fa
     return claims
 
 
+def is_demo_auth_enabled() -> bool:
+    """
+    Checks if deterministic demo/mock tokens ('mock-token-*', 'dev-token-*', 'test-token-*', 'claims.*') are allowed.
+    Rules:
+    1. If ENVIRONMENT == 'production' (in settings or os.environ), ALWAYS disabled (returns False).
+    2. Otherwise, enabled ONLY if DEMO_AUTH_ENABLED=true (in settings or os.environ) OR TESTING=1 (in os.environ).
+    3. Default is False.
+    """
+    env = os.environ.get("ENVIRONMENT") or settings.ENVIRONMENT
+    if env.lower() == "production":
+        return False
+    if os.environ.get("TESTING") == "1":
+        return True
+    if os.environ.get("DEMO_AUTH_ENABLED", "").lower() in ("true", "1") or getattr(settings, "DEMO_AUTH_ENABLED", False):
+        return True
+    return False
+
+
 def verify_id_token(token: str) -> AuthenticatedUser:
     """
     Decodes and verifies a token.
@@ -98,6 +116,13 @@ def verify_id_token(token: str) -> AuthenticatedUser:
 
     # 1. Deterministic Test / Development Tokens
     if clean_token.startswith("mock-token-") or clean_token.startswith("dev-token-") or clean_token.startswith("test-token-"):
+        if not is_demo_auth_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Mock tokens are disabled in this environment (requires DEMO_AUTH_ENABLED=true or TESTING=1 outside production)",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
         parts = clean_token.lower()
         if "patient-1" in parts or "patient_1" in parts or "patient-001" in parts:
             uid = "patient_demo_1"
@@ -141,6 +166,12 @@ def verify_id_token(token: str) -> AuthenticatedUser:
 
     # 2. Base64 JSON token for testing custom payloads: e.g. 'claims.<base64>'
     if clean_token.startswith("claims."):
+        if not is_demo_auth_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Mock claims tokens are disabled in this environment",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         try:
             raw_b64 = clean_token.split("claims.", 1)[1]
             padded = raw_b64 + "=" * (-len(raw_b64) % 4)
