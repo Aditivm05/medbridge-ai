@@ -53,14 +53,16 @@ def run_phase9_golden_workflow():
 
     # 2. Attach Sample Medical Document (Valid minimal PDF with extractable text)
     sample_txt = (
-        b"%PDF-1.4\n"
-        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
-        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
-        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
-        b"5 0 obj\n<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 712 Td (Ultrasound Pelvis Normal) Tj ET\nendstream\nendobj\n"
-        b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000318 00000 n \n"
-        b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n412\n%%EOF\n"
+        b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
+        b"1 0 obj\n<<\n/Producer (pypdf)\n>>\nendobj\n"
+        b"2 0 obj\n<<\n/Type /Pages\n/Count 1\n/Kids [ 4 0 R ]\n>>\nendobj\n"
+        b"3 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n/Outlines 7 0 R\n>>\nendobj\n"
+        b"4 0 obj\n<<\n/Type /Page\n/MediaBox [ 0 0 612 792 ]\n/Contents 5 0 R\n/Resources <<\n/Font <<\n/F1 6 0 R\n>>\n>>\n/Parent 2 0 R\n>>\nendobj\n"
+        b"5 0 obj\n<<\n/Length 56\n>>\nstream\nBT\n/F1 12 Tf\n72 712 Td\n(Ultrasound Pelvis Normal) Tj\nET\n\nendstream\nendobj\n"
+        b"6 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n"
+        b"7 0 obj\n<<\n>>\nendobj\n"
+        b"xref\n0 8\n0000000000 65535 f \n0000000015 00000 n \n0000000054 00000 n \n0000000113 00000 n \n0000000178 00000 n \n0000000306 00000 n \n0000000412 00000 n \n0000000482 00000 n \n"
+        b"trailer\n<<\n/Size 8\n/Root 3 0 R\n/Info 1 0 R\n>>\nstartxref\n503\n%%EOF\n"
     )
     files = {"file": ("ultrasound_appendix.pdf", sample_txt, "application/pdf")}
     res2 = requests.post(

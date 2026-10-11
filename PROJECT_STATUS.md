@@ -184,21 +184,34 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Firestore transaction acceptance**: **VERIFIED** *(11 Oct 2026: verified in Phase 8 via `test_atomic_accept_updates_case_and_clinician_documents` and live concurrency race test on Firestore emulator)*.
   - **Phase 12 IAM signBlob production signing**: **`UNTESTED`** *(documented in ARCHITECTURE.md for production Cloud Run deployment)*.
 
-- **Frontend Production Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors, built in 2.48s).
+- **Phase 9 Manual End-to-End Browser Workflow (11 Oct 2026 — VERIFIED):**
+  - Full multi-persona user flow tested and confirmed in browser on `http://localhost:5173` with backend on `http://127.0.0.1:8000`:
+    1. **Patient Intake**: Submitted urgent abdominal pain case in English (`DRAFT`).
+    2. **Medical Document Upload**: Uploaded ultrasound report with magic-byte and MIME verification.
+    3. **AI Doctor Brief**: Generated Gemini brief with source references, clinical gaps, and no autonomous diagnosis.
+    4. **Patient Approval**: Approved brief; enqueued for matching (`SUBMITTED` -> `MATCHING`).
+    5. **Clinician Matching & Acceptance**: Switched persona to verified clinician (`Dr. Rajesh Patil`), accepted case via atomic transaction (`ACCEPTED`, clinician marked busy).
+    6. **Consultation Workspace**: Reviewed brief and attached documents side-by-side; recorded structured clinical observations and supportive care advice (`IN_CONSULTATION`).
+    7. **Follow-Up & Case Completion**: Clinician scheduled recommended follow-up date and emergency instructions, completed case atomically (`COMPLETED`, clinician released back to `available`).
+    8. **Patient History & Follow-Up View**: Switched back to Patient persona; verified completed case badge, consultation notes, and read-only follow-up schedule. Cross-patient isolation verified (403 Forbidden).
+
+- **Frontend Production Build:** `tsc && vite build` succeeded with returncode 0 (`1500 modules transformed`, zero TS errors, built in 2.65s).
 
 ## 5. Next Steps
-- Phase 8 (Clinician Matching, Concurrency & Lifecycle) is complete and verified.
-- Next implementation target: Phase 9 (Consultation Workspace & Follow-Up lifecycle completion).
+- Phase 9 (Consultation Workspace, Follow-Up Coordination & Terminal Case Completion) is complete and verified across unit tests, live smoke test, and manual browser workflow.
+- All core hackathon MVP clinical and care-coordination workflows are operational.
 - Do NOT push to remote without user instruction.
 
 ## 6. Known Limitations & Tech Debt
 
 ### Known Limitations
 1. **Demo Clinicians are Simulated**: All seeded clinicians (`Dr. Rajesh Patil`, `Dr. Ananya Sharma`, `Dr. Priya Deshmukh`, `Dr. Vikram Malhotra`, `Dr. Sneha Kulkarni`) are synthetic test personas explicitly tagged with `[DEMO / SIMULATED]` and `isDemo: true`.
-2. **Matching Queue is In-Process / Query-Based**: The matching algorithm executes queries against Firestore rather than using a distributed message broker or Redis queue. This is appropriate for the hackathon MVP but would be backed by Cloud Tasks or Pub/Sub in high-volume production.
-3. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
-4. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
-5. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
+2. **Consultation is Text-Based and Simulated**: The consultation workspace supports structured text observations and supportive care guidance explicitly tagged with `[DEMO / SIMULATED]`. Real-time audio/video WebRTC teleconsultation is out of scope for this hackathon MVP.
+3. **Follow-up Reminders are In-App Only**: Follow-up dates and emergency warning directives are persisted in Firestore and rendered in the patient dashboard/follow-up screens; external SMS/push notifications are not triggered (zero fake notifications policy).
+4. **Matching Queue is In-Process / Query-Based**: The matching algorithm executes queries against Firestore rather than using a distributed message broker or Redis queue. This is appropriate for the hackathon MVP but would be backed by Cloud Tasks or Pub/Sub in high-volume production.
+5. **Brief generation rate limit is in memory**: Brief generation rate limit is in memory (resets on restart, not shared across instances).
+6. **Names typed in free text are not removed before sending**: Patient ID, patient name, case ID, and filenames are strictly excluded, but any names typed directly into free-text fields (such as chief complaint or history) are not filtered before sending to Gemini; platform intended for synthetic data only.
+7. **DRAFT check and case updates use an in-process lock**: The status check and metadata updates in `case_service.py` (`update_case`) use an in-process threading lock (`self._lock`) rather than a distributed lock or database transaction; safe for single-instance deployment, but concurrent updates across multiple server instances would require Firestore transactions.
 
 ### Technical Debt & Known Issues
 1. **Starlette Deprecation Warning**: Pytest reports `.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using 'httpx' with 'starlette.testclient' is deprecated; install 'httpx2' instead.` (harmless library notice from FastAPI's internal testclient import).
