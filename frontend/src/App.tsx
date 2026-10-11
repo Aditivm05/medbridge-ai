@@ -390,8 +390,8 @@ export function App() {
             currentCase={effectiveCase}
             language={language}
             onBack={() => navigateTo('clinician-dashboard')}
-            onSaveConsultation={(notes, careAdvice) => {
-              recordConsultationNotes(effectiveCase.caseId, notes, careAdvice);
+            onSaveConsultation={async (notes, careAdvice) => {
+              await recordConsultationNotes(effectiveCase.caseId, notes, careAdvice);
               navigateTo('follow-up', effectiveCase.caseId);
             }}
           />
@@ -402,8 +402,8 @@ export function App() {
             currentCase={effectiveCase}
             language={language}
             onBack={() => navigateTo('consultation', effectiveCase.caseId)}
-            onFinalizeCase={(followUpData) => {
-              completeCaseAndFollowUp(effectiveCase.caseId, followUpData);
+            onFinalizeCase={async (followUpData) => {
+              await completeCaseAndFollowUp(effectiveCase.caseId, followUpData);
               authService.switchRole('patient');
               navigateTo('patient-dashboard');
             }}

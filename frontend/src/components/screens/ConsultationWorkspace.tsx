@@ -25,7 +25,7 @@ interface ConsultationWorkspaceProps {
   currentCase: CaseData;
   language: LanguageCode;
   onBack: () => void;
-  onSaveConsultation: (notes: string, careAdvice: string) => void;
+  onSaveConsultation: (notes: string, careAdvice: string) => Promise<void> | void;
 }
 
 export const ConsultationWorkspace: React.FC<ConsultationWorkspaceProps> = ({
@@ -57,6 +57,8 @@ export const ConsultationWorkspace: React.FC<ConsultationWorkspaceProps> = ({
     currentCase.consultation?.provisionalCareAdvice ||
       'Rest in recumbent position with knees slightly flexed to reduce abdominal wall tension. Maintain oral hydration with clear electrolyte fluids only (no solid fatty meals). Avoid application of hot water compress to abdomen. Re-evaluate temperature every 4 hours.'
   );
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const docs = currentCase.documents || [];
   const currentSession = authService.getCurrentSession();
@@ -82,6 +84,24 @@ export const ConsultationWorkspace: React.FC<ConsultationWorkspaceProps> = ({
     fetchBrief();
   }, [fetchBrief]);
 
+  // Fetch existing consultation from backend if available
+  useEffect(() => {
+    let isMounted = true;
+    const fetchExistingConsultation = async () => {
+      try {
+        const c = await api.getConsultation(currentCase.caseId);
+        if (isMounted && c) {
+          if (c.clinicianNotes) setClinicianNotes(c.clinicianNotes);
+          if (c.provisionalCareAdvice) setCareAdvice(c.provisionalCareAdvice);
+        }
+      } catch {}
+    };
+    fetchExistingConsultation();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentCase.caseId]);
+
   // Submit clinician review through POST /api/v1/cases/{case_id}/brief/review
   const handleReviewBrief = async () => {
     setIsSubmittingReview(true);
@@ -102,10 +122,18 @@ export const ConsultationWorkspace: React.FC<ConsultationWorkspaceProps> = ({
     }
   };
 
-  const handleCompleteConsultation = (e: React.FormEvent) => {
+  const handleCompleteConsultation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clinicianNotes.trim() || !careAdvice.trim()) return;
-    onSaveConsultation(clinicianNotes, careAdvice);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSaveConsultation(clinicianNotes, careAdvice);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Failed to record consultation notes.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const isBriefReviewed = brief?.briefStatus === 'CLINICIAN_REVIEWED';
@@ -571,22 +599,35 @@ export const ConsultationWorkspace: React.FC<ConsultationWorkspaceProps> = ({
               * Remember: MedBridge AI coordinates care. No prescriptions can be generated without in-person or live telemedicine compliance. Only supportive care advice permitted.
             </div>
 
+            {saveError && (
+              <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{saveError}</span>
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={onBack}
-                className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+                disabled={isSaving}
+                className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer disabled:opacity-50"
               >
                 Back to Queue
               </button>
 
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-brand-500/20 transition-all cursor-pointer"
+                disabled={isSaving}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-brand-500/20 transition-all cursor-pointer disabled:opacity-50"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{t.completeConsultationBtn}</span>
+                {isSaving ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>{isSaving ? 'Recording Assessment...' : t.completeConsultationBtn}</span>
               </button>
             </div>
           </form>

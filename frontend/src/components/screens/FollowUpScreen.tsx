@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
-import { Calendar, CheckCircle2, ArrowLeft, HeartHandshake } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, CheckCircle2, ArrowLeft, HeartHandshake, Loader2, AlertTriangle } from 'lucide-react';
 import { CaseData, LanguageCode } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { SimulationBadge } from '../common/SimulationBadge';
+import { api } from '../../services/api';
 
 interface FollowUpScreenProps {
   currentCase: CaseData;
   language: LanguageCode;
   onBack: () => void;
-  onFinalizeCase: (followUp: { required: boolean; recommendedDate: string; instructions: string }) => void;
+  onFinalizeCase: (followUp: { required: boolean; recommendedDate: string; instructions: string }) => Promise<void> | void;
 }
 
 export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
@@ -18,23 +19,69 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
   onFinalizeCase,
 }) => {
   const t = getTranslation(language);
-  const [required, setRequired] = useState(true);
-  const [recommendedDate, setRecommendedDate] = useState('2026-10-15');
+  const [required, setRequired] = useState(currentCase.followUp?.required ?? true);
+  const [recommendedDate, setRecommendedDate] = useState(currentCase.followUp?.recommendedDate || '2026-10-18');
   const [instructions, setInstructions] = useState(
-    'If right lower quadrant abdominal tenderness intensifies, high fever spikes above 101.5°F, or repeated vomiting occurs, immediately report to the nearest hospital emergency room. Otherwise, schedule clinical ultrasound review in 5 days.'
+    currentCase.followUp?.instructions ||
+      'If right lower quadrant abdominal tenderness intensifies, high fever spikes above 101.5°F, or repeated vomiting occurs, immediately report to the nearest hospital emergency room. Otherwise, schedule clinical ultrasound review in 5 days.'
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [loadedConsultation, setLoadedConsultation] = useState<any>(currentCase.consultation || null);
+  const [loadedFollowUp, setLoadedFollowUp] = useState<any>(currentCase.followUp || null);
+  const [isFinalizing, setIsFinalizing] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Fetch consultation & follow-up from backend if not present in store
+  useEffect(() => {
+    let isMounted = true;
+    const fetchBackendData = async () => {
+      try {
+        if (!loadedConsultation) {
+          const c = await api.getConsultation(currentCase.caseId);
+          if (isMounted && c) setLoadedConsultation(c);
+        }
+      } catch {}
+
+      try {
+        if (!loadedFollowUp) {
+          const f = await api.getFollowUp(currentCase.caseId);
+          if (isMounted && f) {
+            setLoadedFollowUp(f);
+            setRequired(f.required);
+            setRecommendedDate(f.recommendedDate);
+            setInstructions(f.instructions);
+          }
+        }
+      } catch {}
+    };
+
+    fetchBackendData();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentCase.caseId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!instructions.trim()) return;
-    onFinalizeCase({
-      required,
-      recommendedDate,
-      instructions,
-    });
+    setIsFinalizing(true);
+    setSubmitError(null);
+    try {
+      await onFinalizeCase({
+        required,
+        recommendedDate,
+        instructions,
+      });
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to finalize case.');
+    } finally {
+      setIsFinalizing(false);
+    }
   };
 
-  const isCompleted = currentCase.status === 'COMPLETED';
+  const isCompleted = currentCase.status === 'COMPLETED' || Boolean(loadedFollowUp);
+
+  const consultationToDisplay = loadedConsultation || currentCase.consultation;
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -78,25 +125,32 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
         )}
 
         {/* Consultation Notes Summary */}
-        {currentCase.consultation && (
+        {consultationToDisplay && (
           <div className="mb-6 rounded-xl border border-slate-200 p-4 bg-slate-50 space-y-3 text-xs text-slate-700">
             <div className="flex items-center justify-between border-b border-slate-200 pb-2">
               <span className="font-bold text-slate-900 flex items-center gap-1.5">
                 <HeartHandshake className="w-4 h-4 text-brand-600" />
-                Clinician Consultation Record
+                Clinician Consultation Record [DEMO / SIMULATED]
               </span>
-              <span className="font-semibold text-teal-800">{currentCase.consultation.clinicianName}</span>
+              <span className="font-semibold text-teal-800">{consultationToDisplay.clinicianName || 'Dr. Rajesh Patil'}</span>
             </div>
 
             <div>
               <span className="font-bold text-slate-800 block mb-0.5">Assessment:</span>
-              <p className="text-slate-700 leading-relaxed">{currentCase.consultation.clinicianNotes}</p>
+              <p className="text-slate-700 leading-relaxed">{consultationToDisplay.clinicianNotes}</p>
             </div>
 
             <div>
               <span className="font-bold text-slate-800 block mb-0.5">Supportive Care Advice:</span>
-              <p className="text-slate-700 leading-relaxed">{currentCase.consultation.provisionalCareAdvice}</p>
+              <p className="text-slate-700 leading-relaxed">{consultationToDisplay.provisionalCareAdvice}</p>
             </div>
+          </div>
+        )}
+
+        {submitError && (
+          <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-rose-800 text-xs">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{submitError}</span>
           </div>
         )}
 
@@ -108,7 +162,7 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
               type="checkbox"
               checked={required}
               onChange={(e) => setRequired(e.target.checked)}
-              disabled={isCompleted}
+              disabled={isCompleted || isFinalizing}
               className="w-4 h-4 text-brand-600 rounded border-slate-300 focus:ring-brand-500 cursor-pointer"
             />
             <label htmlFor="followUpRequired" className="text-xs sm:text-sm font-bold text-slate-800 cursor-pointer">
@@ -129,7 +183,7 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
                   type="date"
                   value={recommendedDate}
                   onChange={(e) => setRecommendedDate(e.target.value)}
-                  disabled={isCompleted}
+                  disabled={isCompleted || isFinalizing}
                   className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-brand-500 text-xs sm:text-sm text-slate-800 outline-hidden disabled:bg-slate-100"
                   required
                 />
@@ -147,7 +201,7 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
               rows={4}
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
-              disabled={isCompleted}
+              disabled={isCompleted || isFinalizing}
               placeholder={t.followUpInstructionsPlaceholder}
               className="w-full p-3.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-brand-500 text-xs sm:text-sm text-slate-800 outline-hidden disabled:bg-slate-100"
               required
@@ -159,7 +213,8 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
             <button
               type="button"
               onClick={onBack}
-              className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+              disabled={isFinalizing}
+              className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer disabled:opacity-50"
             >
               Back
             </button>
@@ -167,10 +222,15 @@ export const FollowUpScreen: React.FC<FollowUpScreenProps> = ({
             {!isCompleted ? (
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
+                disabled={isFinalizing}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{t.finalizeCaseBtn}</span>
+                {isFinalizing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>{isFinalizing ? 'Finalizing Case...' : t.finalizeCaseBtn}</span>
               </button>
             ) : (
               <button

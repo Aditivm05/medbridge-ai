@@ -334,74 +334,148 @@ class CaseStore {
     } catch {}
   }
 
-  public recordConsultationNotes(
+  public async recordConsultationNotes(
     caseId: string,
     notes: string,
     careAdvice: string
-  ): void {
+  ): Promise<{ success: boolean; error?: string }> {
     const now = new Date().toISOString();
 
-    this.cases = this.cases.map((c) => {
-      if (c.caseId === caseId) {
-        return {
-          ...c,
-          status: 'IN_CONSULTATION',
-          consultation: {
-            consultationId: `consult_${caseId}`,
-            caseId,
-            clinicianId: c.assignedClinicianId || 'demo_doc_patil',
-            clinicianName: c.assignedClinicianName || 'Dr. Rajesh Patil [DEMO / SIMULATED]',
-            consultationType: 'text_based_consultation_simulated',
-            isSimulated: true,
-            clinicianNotes: notes,
-            provisionalCareAdvice: careAdvice,
-            startedAt: c.acceptedAt || now,
-            endedAt: null,
-          },
-          updatedAt: now,
-        };
-      }
-      return c;
-    });
+    try {
+      const serverConsultation = await api.saveConsultation(caseId, {
+        clinicianNotes: notes,
+        provisionalCareAdvice: careAdvice,
+        isSimulated: true,
+      });
 
-    this.notify();
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'IN_CONSULTATION',
+            consultationId: serverConsultation.consultationId,
+            consultation: {
+              consultationId: serverConsultation.consultationId,
+              caseId,
+              clinicianId: serverConsultation.clinicianId,
+              clinicianName: c.assignedClinicianName || 'Dr. Rajesh Patil [DEMO / SIMULATED]',
+              consultationType: 'text_based_consultation_simulated',
+              isSimulated: true,
+              clinicianNotes: serverConsultation.clinicianNotes,
+              provisionalCareAdvice: serverConsultation.provisionalCareAdvice,
+              startedAt: serverConsultation.startedAt || c.acceptedAt || now,
+              endedAt: serverConsultation.endedAt || null,
+            },
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
+
+      this.notify();
+      return { success: true };
+    } catch (err: any) {
+      // Local fallback for offline/synthetic state
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'IN_CONSULTATION',
+            consultation: {
+              consultationId: `consult_${caseId}`,
+              caseId,
+              clinicianId: c.assignedClinicianId || 'demo_doc_patil',
+              clinicianName: c.assignedClinicianName || 'Dr. Rajesh Patil [DEMO / SIMULATED]',
+              consultationType: 'text_based_consultation_simulated',
+              isSimulated: true,
+              clinicianNotes: notes,
+              provisionalCareAdvice: careAdvice,
+              startedAt: c.acceptedAt || now,
+              endedAt: null,
+            },
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
+
+      this.notify();
+      return { success: true, error: err?.message };
+    }
   }
 
-  public completeCaseAndFollowUp(
+  public async completeCaseAndFollowUp(
     caseId: string,
     followUp: { required: boolean; recommendedDate: string; instructions: string }
-  ): void {
+  ): Promise<{ success: boolean; error?: string }> {
     const now = new Date().toISOString();
 
-    this.cases = this.cases.map((c) => {
-      if (c.caseId === caseId) {
-        const followUpData: FollowUpData = {
-          followUpId: `followup_${caseId}`,
-          caseId,
-          patientId: c.patientId,
-          clinicianId: c.assignedClinicianId || 'demo_doc_patil',
-          required: followUp.required,
-          recommendedDate: followUp.recommendedDate,
-          status: 'scheduled',
-          instructions: followUp.instructions,
-          createdAt: now,
-        };
+    try {
+      const result = await api.completeCaseWithFollowUp(caseId, followUp);
+      const serverCase = result.case;
+      const serverFollowUp = result.followUp;
 
-        return {
-          ...c,
-          status: 'COMPLETED',
-          completedAt: now,
-          followUp: followUpData,
-          consultation: c.consultation
-            ? { ...c.consultation, endedAt: now }
-            : null,
-          updatedAt: now,
-        };
-      }
-      return c;
-    });
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'COMPLETED',
+            completedAt: serverCase?.completedAt || now,
+            followUp: {
+              followUpId: serverFollowUp?.followUpId || `followup_${caseId}`,
+              caseId,
+              patientId: c.patientId,
+              clinicianId: serverFollowUp?.clinicianId || c.assignedClinicianId || 'demo_doc_patil',
+              required: serverFollowUp?.required ?? followUp.required,
+              recommendedDate: serverFollowUp?.recommendedDate ?? followUp.recommendedDate,
+              status: (serverFollowUp?.status || 'scheduled') as any,
+              instructions: serverFollowUp?.instructions ?? followUp.instructions,
+              createdAt: serverFollowUp?.createdAt || now,
+            },
+            consultation: c.consultation
+              ? { ...c.consultation, endedAt: now }
+              : null,
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
 
-    this.notify();
+      this.notify();
+      return { success: true };
+    } catch (err: any) {
+      // Local fallback for offline/synthetic state
+      const followUpData: FollowUpData = {
+        followUpId: `followup_${caseId}`,
+        caseId,
+        patientId: 'patient_current_user',
+        clinicianId: 'demo_doc_patil',
+        required: followUp.required,
+        recommendedDate: followUp.recommendedDate,
+        status: 'scheduled',
+        instructions: followUp.instructions,
+        createdAt: now,
+      };
+
+      this.cases = this.cases.map((c) => {
+        if (c.caseId === caseId) {
+          return {
+            ...c,
+            status: 'COMPLETED',
+            completedAt: now,
+            followUp: followUpData,
+            consultation: c.consultation
+              ? { ...c.consultation, endedAt: now }
+              : null,
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
+
+      this.notify();
+      return { success: true, error: err?.message };
+    }
   }
 
   public resetToSyntheticDefaults(): void {

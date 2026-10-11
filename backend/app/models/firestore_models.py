@@ -184,3 +184,53 @@ def clinician_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
     if not doc_data.get("createdAt"):
         doc_data["createdAt"] = datetime.utcnow()
     return ClinicianProfile.model_validate(doc_data)
+
+
+def consultation_to_firestore_dict(consultation: Any) -> Dict[str, Any]:
+    """Serializes a ConsultationResponse or ConsultationCreate model to Firestore format."""
+    data = consultation.model_dump(mode="json")
+    if hasattr(consultation, "consultationType") and hasattr(consultation.consultationType, "value"):
+        data["consultationType"] = consultation.consultationType.value
+    for date_field in ["startedAt", "endedAt"]:
+        if data.get(date_field) and isinstance(data[date_field], datetime):
+            data[date_field] = data[date_field].isoformat()
+    return data
+
+
+def consultation_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
+    """Deserializes a Firestore document dictionary into a ConsultationResponse model."""
+    from app.schemas.consultation import ConsultationResponse, ConsultationType
+    doc_data = dict(data)
+    doc_data["consultationId"] = doc_data.get("consultationId", doc_id)
+    if "consultationType" in doc_data and isinstance(doc_data["consultationType"], str):
+        doc_data["consultationType"] = ConsultationType(doc_data["consultationType"])
+    for date_field in ["startedAt", "endedAt"]:
+        if date_field in doc_data and doc_data[date_field]:
+            doc_data[date_field] = firestore_timestamp_to_datetime(doc_data[date_field])
+    if not doc_data.get("startedAt"):
+        doc_data["startedAt"] = datetime.utcnow()
+    return ConsultationResponse.model_validate(doc_data)
+
+
+def follow_up_to_firestore_dict(follow_up: Any) -> Dict[str, Any]:
+    """Serializes a FollowUpResponse model to Firestore format."""
+    data = follow_up.model_dump(mode="json")
+    if hasattr(follow_up, "status") and hasattr(follow_up.status, "value"):
+        data["status"] = follow_up.status.value
+    if data.get("createdAt") and isinstance(data["createdAt"], datetime):
+        data["createdAt"] = data["createdAt"].isoformat()
+    return data
+
+
+def follow_up_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
+    """Deserializes a Firestore document dictionary into a FollowUpResponse model."""
+    from app.schemas.consultation import FollowUpResponse, FollowUpStatus
+    doc_data = dict(data)
+    doc_data["followUpId"] = doc_data.get("followUpId", doc_id)
+    if "status" in doc_data and isinstance(doc_data["status"], str):
+        doc_data["status"] = FollowUpStatus(doc_data["status"])
+    if "createdAt" in doc_data and doc_data["createdAt"]:
+        doc_data["createdAt"] = firestore_timestamp_to_datetime(doc_data["createdAt"])
+    if not doc_data.get("createdAt"):
+        doc_data["createdAt"] = datetime.utcnow()
+    return FollowUpResponse.model_validate(doc_data)

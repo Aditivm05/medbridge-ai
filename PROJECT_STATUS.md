@@ -29,8 +29,19 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
   - **Phase 8d**: Clinician Decline & Availability: Decline endpoint (`POST /cases/{case_id}/decline`) updating case history and falling back to remaining eligible clinicians. Availability endpoint (`PATCH /clinicians/{id}/availability`) and matching pool retrieval (`GET /clinicians/matching-pool`).
   - **Phase 8e**: Frontend Integration: `ClinicianDashboard.tsx` connected to real backend endpoints for matching pool queue, live accept/decline actions, real-time availability toggle, race collision simulation, and authenticated persona switching via `authService.switchUser`.
   - **Verification**: Complete backend test suite (17 Phase 8 tests, 121/121 total passing) & live Firestore emulator smoke test verifying 2-clinician simultaneous race collision (1 winner HTTP 200, 1 loser HTTP 409).
+- [x] **Phase 9: Consultation Workspace, Case Completion & Follow-Up** *(Completed & Verified)*
+  - **Phase 9a**: Consultation Workspace: Text-based consultation interface explicitly labelled `[DEMO / SIMULATED]`. Side-by-side / tabs layout for reviewing AI Doctor Brief and attached source documents with OCR extracted previews.
+  - **Phase 9b**: Clinician Notes & Supportive Care Advice: Pydantic schemas (`ConsultationCreate`, `ConsultationResponse`) enforcing min length (10 chars), max length (5000 / 2000 chars), and strict non-prescription supportive guidance disclaimer.
+  - **Phase 9c**: Case State Transitions & Lifecycle: Status transitions `ACCEPTED` -> `IN_CONSULTATION` on consultation recording, and `IN_CONSULTATION` -> terminal `COMPLETED` on case completion. Terminal state protection: zero outgoing transitions permitted from `COMPLETED`.
+  - **Phase 9d**: Follow-Up Scheduling & Clinician Release: Follow-up schema (`FollowUpCreate`, `FollowUpResponse`) with `required` boolean, `recommendedDate` (YYYY-MM-DD), `instructions` with emergency red-flag safety directives, and `status: "scheduled"`. Case completion atomically sets `completedAt` and releases assigned clinician availability back to `available` with `currentCaseId: None`.
+  - **Phase 9e**: Patient Case History & Follow-Up View: `PatientDashboard.tsx` and `FollowUpScreen.tsx` display completed cases with green completion badges, conclusion timestamps, recorded clinician consultation notes, and scheduled follow-up directives with read-only form controls. Cross-patient reads securely blocked (HTTP 403 Forbidden).
+  - **Phase 9f**: Zero Fake Notifications: Confirmed zero fake notifications, mock toasts, or simulated SMS alerts across the entire workflow.
+  - **Phase 9g**: Verification & Tests:
+    - 9 automated Phase 9 backend tests in `tests/test_phase9_consultation_and_followup.py` passing (130/130 full suite passing).
+    - Frontend production build (`tsc && vite build`) passing with zero errors.
+    - Live end-to-end integration smoke test (`smoke_test_phase9.py`) executed against running FastAPI backend, Firebase emulators, and live Gemini AI (`gemini-3.8-flash`), verifying all 8 steps of the Golden Workflow.
 
-## 3. Files Created Across Phases 1 - 8
+## 3. Files Created Across Phases 1 - 9
 ### Architecture, Docs & Infrastructure
 - `docs/ARCHITECTURE.md`: Complete system architecture, data models for 10 collections, state machine table, concurrency transaction rules, and REST API blueprint.
 - `README.md`: Comprehensive beginner-friendly setup guide with click-by-click commands, architecture diagram, and expected outputs.
@@ -57,7 +68,12 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/app/services/brief_service.py`: AI Doctor Brief service using Google GenAI SDK, strict data-only prompt, Pydantic structured output, conflict detection, rate limiting, and fallback skeleton.
 - `backend/app/services/audit_service.py`: Append-only audit logger.
 - `backend/app/api/routers/`: Routers for `health.py`, `auth.py`, `cases.py` (CRUD, submit, match, accept, decline, status), `clinicians.py` (seed, list, matching pool, availability), `documents.py` (upload-and-verify, background extraction, OCR trigger, text retrieval), `briefs.py` (Doctor Brief generate, read, edit, patient approve, clinician review), `audit.py` (with `/audit/cases/{case_id}`).
-- `backend/tests/test_phase8_clinician_matching.py`: Automated Phase 8 clinician matching and concurrency test suite (17 tests: explicit demo labels, seed idempotency, verification filter, availability filter, language matching, specialty scoring, tie-breaking, NO_CLINICIAN_AVAILABLE transition, retry matching, cancellation, atomic dual-doc accept, decline exclusion, decline exhaustion, simultaneous 2-clinician race condition 409 collision, unverified clinician 403 block, patient 403 block, unverified decline 403 block).
+- `backend/app/services/consultation_service.py`: Consultation and Follow-up service layer handling notes recording, `IN_CONSULTATION` transition, case completion (`COMPLETED`), follow-up scheduling, and clinician availability release.
+- `backend/app/api/routers/consultations.py`: Consultation endpoints (`POST /cases/{id}/consultation`, `GET /cases/{id}/consultation`, `POST /cases/{id}/complete`, `GET /cases/{id}/follow-up`).
+- `backend/app/schemas/consultation.py`: Pydantic schemas for `ConsultationCreate`, `ConsultationResponse`, `FollowUpCreate`, `FollowUpResponse`.
+- `backend/tests/test_phase9_consultation_and_followup.py`: Automated Phase 9 test suite (9 tests: consultation recording, unassigned clinician 403, patient role 403, unverified clinician 403, validation constraints, case completion & follow-up, terminal state protection, patient reading consultation/follow-up, cross-patient 403).
+- `scratch/smoke_test_phase9.py`: Live integration smoke test verifying full 8-step Golden Workflow against live FastAPI backend, Firebase emulators, and live Gemini AI.
+- `backend/tests/test_phase8_clinician_matching.py`: Automated Phase 8 clinician matching and concurrency test suite (17 tests).
 - `backend/tests/test_phase7b_clinician_review.py`: Automated Phase 7b Clinician Review test suite (7 tests).
 - `backend/tests/test_phase7a_doctor_brief.py`: Automated Phase 7a Doctor Brief test suite (16 tests).
 - `backend/tests/test_phase6e_gemini_ocr_extraction.py`: Automated Phase 6e OCR test suite (13 tests).
@@ -71,12 +87,15 @@ MedBridge AI is an AI-powered urgent healthcare care-coordination hackathon MVP.
 - `backend/conftest.py`, `backend/app/__init__.py`, `backend/.venv/.../sitecustomize.py`: Python 3.10.0 ForwardRef compatibility shims.
 
 ### Frontend Components & Security UI (`frontend/`)
-- `frontend/src/types/index.ts`: TypeScript domain definitions across all 7 screens including `ClinicianData` and matching statuses.
+- `frontend/src/types/index.ts`: TypeScript domain definitions across all 7 screens including `ConsultationData`, `FollowUpData`, `ClinicianData`.
 - `frontend/src/vite-env.d.ts`: Standard Vite client type definitions.
 - `frontend/src/services/authService.ts`: Active authentication context, Firebase emulator token provider, and persona switcher with all demo clinicians (`demo_doc_patil`, `demo_doc_sharma`, `demo_doc_deshmukh`, `demo_doc_pending`, `demo_doc_offline`).
-- `frontend/src/services/api.ts`: Authenticated fetch wrapper injecting `Authorization: Bearer <token>` and API helpers (`getMatchingPool`, `acceptCase`, `declineCase`, `matchCase`, `listClinicians`, `updateClinicianAvailability`).
+- `frontend/src/services/api.ts`: Authenticated fetch wrapper injecting `Authorization: Bearer <token>` and API helpers (`saveConsultation`, `getConsultation`, `completeCaseWithFollowUp`, `getFollowUp`, `getMatchingPool`, `acceptCase`, `declineCase`, `matchCase`, `listClinicians`, `updateClinicianAvailability`).
 - `frontend/src/services/mockData.ts`: Realistic synthetic data with all 5 demo clinicians labelled `[DEMO / SIMULATED]`.
-- `frontend/src/services/caseStore.ts`: Reactive state management store with `claimCaseAtomic` (calling backend `api.acceptCase`), `declineCase`, and `syncMatchingPool`.
+- `frontend/src/services/caseStore.ts`: Reactive state management store with `recordConsultationNotes`, `completeCaseAndFollowUp`, `claimCaseAtomic`, `declineCase`, and `syncMatchingPool`.
+- `frontend/src/components/screens/ConsultationWorkspace.tsx`: Text-based Consultation Workspace labelled `[DEMO / SIMULATED]`, Doctor Brief and Documents tabs, clinician observations, provisional care advice (non-prescription), async save loading state.
+- `frontend/src/components/screens/FollowUpScreen.tsx`: Follow-up scheduling screen, emergency red-flag directives, async case completion, read-only completed summary view with consultation assessment record.
+- `frontend/src/components/screens/PatientDashboard.tsx`: Patient dashboard with active/completed filters, case history list, completed case view with consultation and follow-up directives, zero fake notifications.
 - `frontend/src/i18n/translations.ts`: Multilingual dictionary (English, Hindi, Marathi) with complete labels for all 7 screens including claim, decline, and conflict keys.
 - `frontend/src/components/common/EmergencyBanner.tsx`: Static zero-network 112 emergency guidance.
 - `frontend/src/components/common/SimulationBadge.tsx`: Visual `[DEMO / SIMULATED]` badge.

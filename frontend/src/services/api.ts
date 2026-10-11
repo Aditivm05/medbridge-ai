@@ -291,6 +291,74 @@ export const api = {
       xhr.send(formData);
     });
   },
+
+  // Consultation & Follow-Up Endpoints (Phase 9)
+  saveConsultation: async (
+    caseId: string,
+    payload: { clinicianNotes: string; provisionalCareAdvice: string; isSimulated?: boolean }
+  ): Promise<any> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/consultation`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ...payload,
+        isSimulated: payload.isSimulated ?? true,
+      }),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  getConsultation: async (caseId: string): Promise<any> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/consultation`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  completeCaseWithFollowUp: async (
+    caseId: string,
+    payload: { required: boolean; recommendedDate: string; instructions: string }
+  ): Promise<any> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
+
+  getFollowUp: async (caseId: string): Promise<any> => {
+    const res = await authenticatedFetch(`/cases/${caseId}/follow-up`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data.detail) errDetail = data.detail;
+      } catch {}
+      throw new Error(errDetail);
+    }
+    return res.json();
+  },
 };
 
 export function mapUploadError(rawError: string): string {
