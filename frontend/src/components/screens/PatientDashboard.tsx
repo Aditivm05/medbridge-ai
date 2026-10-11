@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { PlusCircle, FileText, ArrowRight, Clock, AlertTriangle, ShieldCheck, Inbox } from 'lucide-react';
+import { PlusCircle, FileText, ArrowRight, Clock, AlertTriangle, ShieldCheck, Inbox, Loader2, RefreshCw, AlertCircle } from 'lucide-react';
 import { CaseData, LanguageCode } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { StatusBadge } from '../common/StatusBadge';
@@ -10,6 +10,9 @@ interface PatientDashboardProps {
   language: LanguageCode;
   onStartNewRequest: () => void;
   onOpenCase: (caseItem: CaseData) => void;
+  isLoading?: boolean;
+  error?: string | null;
+  onRefreshCases?: () => Promise<void> | void;
 }
 
 export const PatientDashboard: React.FC<PatientDashboardProps> = ({
@@ -17,6 +20,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
   language,
   onStartNewRequest,
   onOpenCase,
+  isLoading = false,
+  error = null,
+  onRefreshCases,
 }) => {
   const t = getTranslation(language);
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
@@ -43,15 +49,53 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onStartNewRequest}
-          className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-brand-500/20 transition-all cursor-pointer shrink-0"
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span>{t.startNewRequestBtn}</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {onRefreshCases && (
+            <button
+              type="button"
+              onClick={() => onRefreshCases()}
+              disabled={isLoading}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-bold text-xs border border-slate-200 transition-all cursor-pointer disabled:opacity-50"
+              title="Refresh cases from server"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onStartNewRequest}
+            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-brand-500/20 transition-all cursor-pointer shrink-0"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>{t.startNewRequestBtn}</span>
+          </button>
+        </div>
       </div>
+
+      {/* Visible Error Banner if fetch failed */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Failed to load cases from server</p>
+              <p className="mt-0.5 text-rose-700">{error}</p>
+            </div>
+          </div>
+          {onRefreshCases && (
+            <button
+              type="button"
+              onClick={() => onRefreshCases()}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs cursor-pointer shrink-0"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Retry</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
@@ -90,8 +134,18 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         </button>
       </div>
 
-      {/* Cases List or Empty State */}
-      {filteredCases.length === 0 ? (
+      {/* Loading State when cases are being fetched and list is empty */}
+      {isLoading && cases.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+          <Loader2 className="w-8 h-8 text-brand-600 animate-spin mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-800 mb-1">
+            Loading your care requests...
+          </h3>
+          <p className="text-xs text-slate-500">
+            Retrieving cases for authenticated patient from backend
+          </p>
+        </div>
+      ) : filteredCases.length === 0 ? (
         <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-12 text-center">
           <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
             <Inbox className="w-7 h-7" />

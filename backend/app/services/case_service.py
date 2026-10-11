@@ -132,7 +132,7 @@ class CaseService:
                 doctorBriefId=None,
                 consultationId=None,
                 version=1,
-                metadata={},
+                metadata=case_in.metadata or {},
                 createdAt=now,
                 updatedAt=now,
             )

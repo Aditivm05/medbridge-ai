@@ -26,7 +26,7 @@ import {
 } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { SimulationBadge } from '../common/SimulationBadge';
-import { api } from '../../services/api';
+import { caseStore, useCaseStore } from '../../services/caseStore';
 
 interface DoctorBriefReviewScreenProps {
   currentCase: CaseData;
@@ -44,6 +44,7 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
   onSaveCorrections,
 }) => {
   const t = getTranslation(language);
+  const { updateDoctorBrief, approveDoctorBrief, refreshCase } = useCaseStore();
 
   // Brief state held strictly in React memory (Zero localStorage / sessionStorage)
   const [brief, setBrief] = useState<DoctorBrief | null>(null);
@@ -52,7 +53,8 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
   const [isApproving, setIsApproving] = useState<boolean>(false);
   const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
-  const [isUsingFallback, setIsUsingFallback] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [approveError, setApproveError] = useState<string | null>(null);
 
   // Human approval confirmation checkbox
   const [isConfirmedByPatient, setIsConfirmedByPatient] = useState<boolean>(false);
@@ -65,83 +67,49 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
   const [editAllergiesText, setEditAllergiesText] = useState<string>('');
   const [editVitalsText, setEditVitalsText] = useState<string>('');
 
-  // Fallback skeleton generator when backend AI fails or is unavailable
-  const generateLocalFallbackBrief = useCallback((): DoctorBrief => {
-    const now = new Date().toISOString();
-    return {
-      briefId: `brief_fallback_${currentCase.caseId}`,
-      caseId: currentCase.caseId,
-      schemaVersion: '1.0',
-      version: 1,
-      briefStatus: 'DRAFT_AI',
-      reasonForConsultation: currentCase.chiefComplaint || 'unknown',
-      timelineAndDetails: currentCase.duration
-        ? `Patient reported duration: ${currentCase.duration}`
-        : 'unknown',
-      relevantHistory: [],
-      currentMedications: [],
-      patientReportedAllergies: [],
-      vitals: [],
-      documentFindings: [],
-      conflicts: [],
-      missingInformation: [
-        'AI generation was unavailable; manual review mode enabled.',
-        'Clinician should confirm pre-existing conditions and allergies directly.',
-      ],
-      clarificationQuestions: [
-        'Have symptoms intensified or changed in character?',
-        'Are you currently taking any over-the-counter or prescribed treatments?',
-      ],
-      sourceReferences: [
-        {
-          sourceType: 'PATIENT_REPORTED',
-          reference: 'intake:chiefComplaint',
-        },
-      ],
-      validationWarnings: ['Manual entry fallback active due to AI generation failure.'],
-      disclaimer:
-        'CONFIDENTIAL MEDICAL BRIEF FOR CARE COORDINATION ONLY. ' +
-        'THIS BRIEF DOES NOT CONSTITUTE A MEDICAL DIAGNOSIS OR PRESCRIPTION. ' +
-        'ALL CLINICAL DECISIONS REMAIN THE SOLE RESPONSIBILITY OF THE LICENSED CLINICIAN.',
-      createdAt: now,
-      updatedAt: now,
-    };
-  }, [currentCase]);
-
-  // Load or generate Doctor Brief from real backend API
+  // Load or generate Doctor Brief from real backend API (Strict zero mock fallback on failure)
   const loadOrGenerateBrief = useCallback(async () => {
     setIsLoading(true);
     setErrorNotice(null);
 
     try {
-      // 1. Try to fetch existing brief
+      // 1. Try to fetch existing brief from server
+      let activeBrief: DoctorBrief | null = null;
       try {
-        const existing = await api.getBrief(currentCase.caseId);
-        setBrief(existing);
-        setIsUsingFallback(false);
-        setIsLoading(false);
-        return;
+        activeBrief = await caseStore.getDoctorBrief(currentCase.caseId);
       } catch (getErr: any) {
-        // If 404, we proceed to generate; otherwise continue
+        // Only if 404, we proceed to generate; otherwise if forbidden/server error, fail visibly
+        if (getErr?.status !== 404 && !getErr?.message?.includes('404') && !getErr?.message?.includes('not found')) {
+          throw getErr;
+        }
       }
 
-      // 2. Generate brief via real Gemini endpoint
-      const generated = await api.generateBrief(currentCase.caseId, false);
-      setBrief(generated);
-      setIsUsingFallback(false);
+      // 2. Generate brief via real backend endpoint if none exists
+      if (!activeBrief) {
+        activeBrief = await caseStore.generateDoctorBrief(currentCase.caseId, false);
+      }
+
+      setBrief(activeBrief);
+      setErrorNotice(null);
     } catch (err: any) {
-      console.warn('Real backend brief generation failed, enabling manual-entry fallback:', err);
-      const fallback = generateLocalFallbackBrief();
-      setBrief(fallback);
-      setIsUsingFallback(true);
-      setErrorNotice(
-        err?.message ||
-        'AI brief synthesis is temporarily unavailable. A manual review skeleton has been prepared so you can proceed without delay.'
-      );
+      console.error('Backend doctor brief generation failed:', err);
+      // Strictly do NOT substitute a synthetic brief when backend fails
+      setBrief(null);
+      let message = err?.message || 'Failed to generate Doctor Brief.';
+      if (err?.status === 403 || message.includes('403') || message.includes('Forbidden')) {
+        message = 'Access Denied (403): You are not authorized to access or generate a Doctor Brief for this case.';
+      } else if (err?.status === 429 || message.includes('429')) {
+        message = 'Rate limit exceeded (429): Brief generation is temporarily throttled. Please wait a moment before retrying.';
+      } else if (err?.status === 404 || message.includes('404')) {
+        message = `Case '${currentCase.caseId}' was not found on the server (404).`;
+      } else if (message.includes('Network') || message.includes('Failed to fetch')) {
+        message = 'Network error: Unable to connect to the backend server. Please verify your connection and server status.';
+      }
+      setErrorNotice(message);
     } finally {
       setIsLoading(false);
     }
-  }, [currentCase.caseId, generateLocalFallbackBrief]);
+  }, [currentCase.caseId]);
 
   useEffect(() => {
     loadOrGenerateBrief();
@@ -152,12 +120,15 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
     setIsRegenerating(true);
     setErrorNotice(null);
     try {
-      const regenerated = await api.generateBrief(currentCase.caseId, true);
+      const regenerated = await caseStore.generateDoctorBrief(currentCase.caseId, true);
       setBrief(regenerated);
-      setIsUsingFallback(false);
       setIsConfirmedByPatient(false);
     } catch (err: any) {
-      setErrorNotice(err?.message || 'Failed to regenerate brief.');
+      let message = err?.message || 'Failed to regenerate brief.';
+      if (err?.status === 429 || message.includes('429')) {
+        message = 'Rate limit exceeded (429): Please wait before regenerating.';
+      }
+      setErrorNotice(message);
     } finally {
       setIsRegenerating(false);
     }
@@ -166,6 +137,7 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
   // Open Edit Modal with current values
   const handleOpenEditModal = () => {
     if (!brief) return;
+    setEditError(null);
     setEditTimeline(brief.timelineAndDetails || '');
     setEditHistoryText(brief.relevantHistory.map(h => h.fact).join('\n'));
     setEditMedsText(brief.currentMedications.map(m => m.fact).join('\n'));
@@ -177,10 +149,10 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
   // Save Human Edits via PUT /cases/{case_id}/brief
   const handleSaveEdits = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!brief) return;
+    if (!brief || isSavingEdit) return;
 
     setIsSavingEdit(true);
-    setErrorNotice(null);
+    setEditError(null);
 
     const relevantHistory: SourcedFact[] = editHistoryText
       .split('\n')
@@ -241,36 +213,26 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
     };
 
     try {
-      if (!isUsingFallback) {
-        const updated = await api.updateBrief(currentCase.caseId, editPayload);
-        setBrief(updated);
-      } else {
-        // Fallback update in React memory
-        setBrief(prev => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            timelineAndDetails: editPayload.timelineAndDetails,
-            relevantHistory: editPayload.relevantHistory || [],
-            currentMedications: editPayload.currentMedications || [],
-            patientReportedAllergies: editPayload.patientReportedAllergies || [],
-            vitals: editPayload.vitals || [],
-            briefStatus: 'EDITED',
-            version: prev.version + 1,
-            updatedAt: new Date().toISOString(),
-          };
-        });
-      }
+      const updated = await updateDoctorBrief(currentCase.caseId, editPayload);
+      setBrief(updated);
 
       // Any edit to an approved brief reverts patient approval
       setIsConfirmedByPatient(false);
       setIsEditModalOpen(false);
+      setEditError(null);
+
+      // Refresh case to sync server state
+      await refreshCase(currentCase.caseId);
 
       if (onSaveCorrections) {
         onSaveCorrections(`Timeline: ${editTimeline}; Meds: ${editMedsText}`);
       }
     } catch (err: any) {
-      setErrorNotice(err?.message || 'Could not save brief modifications.');
+      let msg = err?.message || 'Could not save brief modifications.';
+      if (err?.status === 403 || msg.includes('403') || msg.includes('submission')) {
+        msg = 'Cannot edit brief: This case has already been submitted or access is restricted.';
+      }
+      setEditError(msg);
     } finally {
       setIsSavingEdit(false);
     }
@@ -278,28 +240,24 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
 
   // Approve Brief via POST /cases/{case_id}/brief/approve
   const handleApproveBrief = async () => {
-    if (!brief) return;
+    if (!brief || isApproving) return;
     setIsApproving(true);
-    setErrorNotice(null);
+    setApproveError(null);
 
     try {
-      if (!isUsingFallback) {
-        const approved = await api.approveBrief(currentCase.caseId, 'Patient confirmed facts are accurate');
-        setBrief(approved);
-      } else {
-        setBrief(prev => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            briefStatus: 'PATIENT_APPROVED',
-            approvedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-        });
-      }
+      const approved = await approveDoctorBrief(currentCase.caseId, 'Patient confirmed facts are accurate');
+      setBrief(approved);
       setIsConfirmedByPatient(true);
+      setApproveError(null);
+
+      // Refresh case to sync server state
+      await refreshCase(currentCase.caseId);
     } catch (err: any) {
-      setErrorNotice(err?.message || 'Failed to record brief approval.');
+      let msg = err?.message || 'Failed to record brief approval.';
+      if (err?.status === 403 || msg.includes('403') || msg.includes('Forbidden')) {
+        msg = 'Approval forbidden: Only the case-owning patient can approve this brief.';
+      }
+      setApproveError(msg);
     } finally {
       setIsApproving(false);
     }
@@ -421,8 +379,8 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
         </div>
       </div>
 
-      {/* Error notification if backend AI synthesis failed */}
-      {errorNotice && (
+      {/* Error notification if brief regeneration failed while a previous brief is loaded */}
+      {errorNotice && brief && (
         <div
           role="alert"
           className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex items-start gap-3 text-rose-950 text-xs"
@@ -461,6 +419,45 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
           <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
             Extracting objective lab findings from documents, assembling timeline facts, and checking for clinical discrepancies.
           </p>
+        </div>
+      )}
+
+      {/* Actionable Error State Card if generation or retrieval failed without a brief */}
+      {!isLoading && !brief && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="bg-white rounded-2xl border-2 border-rose-300 p-6 sm:p-8 shadow-xs text-center space-y-4"
+        >
+          <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto text-rose-600">
+            <FileWarning className="w-6 h-6" aria-hidden="true" />
+          </div>
+          <div className="max-w-md mx-auto">
+            <h2 className="text-base sm:text-lg font-black text-slate-900">
+              Doctor Brief Generation Failed
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 mt-1 leading-relaxed">
+              {errorNotice || 'The backend could not synthesize or retrieve the Doctor Brief for this case.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onBack}
+              className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-xs font-bold text-slate-700 transition cursor-pointer"
+            >
+              Back to Upload Screen
+            </button>
+            <button
+              type="button"
+              onClick={loadOrGenerateBrief}
+              disabled={isLoading}
+              className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Generation</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -953,6 +950,19 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
                   <span>Brief approved by patient on {new Date(brief.approvedAt || brief.updatedAt).toLocaleTimeString()}. Ready to submit.</span>
                 </div>
               )}
+
+              {approveError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-medium"
+                >
+                  <FileWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold">Approval Error</strong>
+                    <span>{approveError}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Primary Action Buttons */}
@@ -1014,6 +1024,19 @@ export const DoctorBriefReviewScreen: React.FC<DoctorBriefReviewScreenProps> = (
             </p>
 
             <form onSubmit={handleSaveEdits} className="space-y-3.5 text-xs">
+              {editError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-medium"
+                >
+                  <FileWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold">Save Error</strong>
+                    <span>{editError}</span>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block font-bold text-slate-800 mb-1">
                   Timeline and Symptom Details:

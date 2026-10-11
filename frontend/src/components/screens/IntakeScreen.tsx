@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock, ArrowRight, ArrowLeft } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, ArrowRight, ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import { LanguageCode, RequestedUrgency } from '../../types';
 import { getTranslation } from '../../i18n/translations';
 import { EmergencyBanner } from '../common/EmergencyBanner';
@@ -17,7 +17,8 @@ interface IntakeScreenProps {
     knownConditions?: string;
     medications?: string;
     allergies?: string;
-  }) => void;
+    idempotencyKey?: string;
+  }) => Promise<void> | void;
 }
 
 const COMMON_SYMPTOMS = [
@@ -45,6 +46,14 @@ export const IntakeScreen: React.FC<IntakeScreenProps> = ({
   const [medications, setMedications] = useState('');
   const [allergies, setAllergies] = useState('');
 
+  // Stable idempotency key per intended intake creation - preserved across retries
+  const [idempotencyKey] = useState<string>(
+    () => `idem_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`
+  );
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const toggleSymptom = (symptom: string) => {
     if (selectedSymptoms.includes(symptom)) {
       setSelectedSymptoms(selectedSymptoms.filter((s) => s !== symptom));
@@ -57,20 +66,42 @@ export const IntakeScreen: React.FC<IntakeScreenProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chiefComplaint.trim() || !duration.trim()) return;
+    setValidationError(null);
+    setSubmitError(null);
 
-    onSubmitIntake({
-      chiefComplaint,
-      duration,
-      requestedUrgency: urgency,
-      patientLanguage: language,
-      symptoms: selectedSymptoms,
-      knownConditions,
-      medications,
-      allergies,
-    });
+    const cleanComplaint = chiefComplaint.trim();
+    const cleanDuration = duration.trim();
+
+    if (!cleanComplaint || cleanComplaint.length < 5) {
+      setValidationError('Chief complaint is required and must be at least 5 characters long.');
+      return;
+    }
+
+    if (!cleanDuration || cleanDuration.length < 2) {
+      setValidationError('Duration is required and must be at least 2 characters long.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await onSubmitIntake({
+        chiefComplaint: cleanComplaint,
+        duration: cleanDuration,
+        requestedUrgency: urgency,
+        patientLanguage: language,
+        symptoms: selectedSymptoms,
+        knownConditions: knownConditions.trim() || undefined,
+        medications: medications.trim() || undefined,
+        allergies: allergies.trim() || undefined,
+        idempotencyKey,
+      });
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to submit intake request. Please check connection and retry.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -87,7 +118,8 @@ export const IntakeScreen: React.FC<IntakeScreenProps> = ({
             <button
               type="button"
               onClick={onBack}
-              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer"
+              disabled={isSubmitting}
+              className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer disabled:opacity-50"
               aria-label="Back"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -103,6 +135,31 @@ export const IntakeScreen: React.FC<IntakeScreenProps> = ({
           </div>
           <SimulationBadge />
         </div>
+
+        {/* Visible Submit Error Banner */}
+        {submitError && (
+          <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="font-bold">Intake Submission Failed</p>
+              <p className="mt-0.5 text-rose-700">{submitError}</p>
+              <p className="mt-1.5 text-[11px] text-rose-600 font-medium">
+                Your clinical inputs and idempotency key have been preserved. You can safely retry submission below.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Visible Validation Error Banner */}
+        {validationError && (
+          <div className="mb-6 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Validation Error</p>
+              <p className="mt-0.5 text-amber-800">{validationError}</p>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Urgency Level Selector */}
@@ -288,11 +345,25 @@ export const IntakeScreen: React.FC<IntakeScreenProps> = ({
 
             <button
               type="submit"
-              disabled={!chiefComplaint.trim() || !duration.trim()}
+              disabled={!chiefComplaint.trim() || !duration.trim() || isSubmitting}
               className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white font-bold text-sm shadow-md shadow-brand-500/20 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span>{t.saveAndUploadBtn}</span>
-              <ArrowRight className="w-4 h-4" />
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Submitting Intake...</span>
+                </>
+              ) : submitError ? (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Retry Submission</span>
+                </>
+              ) : (
+                <>
+                  <span>{t.saveAndUploadBtn}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </div>
         </form>

@@ -145,7 +145,7 @@ def doctor_brief_from_firestore_dict(doc_id: str, data: Dict[str, Any]) -> Any:
     """Deserializes a Firestore document dictionary into a DoctorBrief model."""
     from app.schemas.doctor_brief import DoctorBrief, BriefStatus
     doc_data = dict(data)
-    doc_data["briefId"] = doc_id
+    doc_data["briefId"] = data.get("briefId") or doc_id
     if "briefStatus" in doc_data and isinstance(doc_data["briefStatus"], str):
         doc_data["briefStatus"] = BriefStatus(doc_data["briefStatus"])
     for date_field in ["createdAt", "updatedAt", "lastEditedAt", "approvedAt", "reviewedAt"]:

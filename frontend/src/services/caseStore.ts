@@ -1,12 +1,55 @@
 import { useState, useEffect } from 'react';
-import { CaseData, DoctorBriefData, DocumentData, FollowUpData, ScreenView } from '../types';
-import { initialMockCases, mockClinicians, sampleDoctorBrief } from './mockData';
+import { CaseData, DoctorBrief, DoctorBriefData, DoctorBriefEditRequest, DocumentData, FollowUpData, ScreenView } from '../types';
+import { mockClinicians } from './mockData';
 import { api } from './api';
 
+export function mapBackendCaseToCaseData(sc: any, existing?: CaseData): CaseData {
+  return {
+    caseId: sc.caseId,
+    patientId: sc.patientId,
+    assignedClinicianId: sc.assignedClinicianId ?? existing?.assignedClinicianId ?? null,
+    assignedClinicianName: existing?.assignedClinicianName ?? null,
+    requestedUrgency: sc.requestedUrgency,
+    status: sc.status,
+    idempotencyKey: sc.idempotencyKey || existing?.idempotencyKey || `idem_${sc.caseId}`,
+    chiefComplaint: sc.chiefComplaint,
+    duration: sc.duration,
+    patientLanguage: sc.patientLanguage || 'en',
+    documentCount: sc.documentCount ?? existing?.documentCount ?? 0,
+    doctorBriefId: sc.doctorBriefId ?? existing?.doctorBriefId ?? null,
+    doctorBrief: existing?.doctorBrief ?? null,
+    realDoctorBrief: existing?.realDoctorBrief ?? null,
+    documents: existing?.documents ?? [],
+    consultationId: sc.consultationId ?? existing?.consultationId ?? null,
+    consultation: existing?.consultation ?? null,
+    followUp: existing?.followUp ?? null,
+    createdAt: typeof sc.createdAt === 'string' ? sc.createdAt : new Date(sc.createdAt || Date.now()).toISOString(),
+    updatedAt: typeof sc.updatedAt === 'string' ? sc.updatedAt : new Date(sc.updatedAt || Date.now()).toISOString(),
+    submittedAt: sc.submittedAt
+      ? typeof sc.submittedAt === 'string'
+        ? sc.submittedAt
+        : new Date(sc.submittedAt).toISOString()
+      : existing?.submittedAt ?? null,
+    acceptedAt: sc.acceptedAt
+      ? typeof sc.acceptedAt === 'string'
+        ? sc.acceptedAt
+        : new Date(sc.acceptedAt).toISOString()
+      : existing?.acceptedAt ?? null,
+    completedAt: sc.completedAt
+      ? typeof sc.completedAt === 'string'
+        ? sc.completedAt
+        : new Date(sc.completedAt).toISOString()
+      : existing?.completedAt ?? null,
+    metadata: sc.metadata || existing?.metadata || {},
+  };
+}
+
 class CaseStore {
-  private cases: CaseData[] = [...initialMockCases];
-  private activeCaseId: string | null = initialMockCases[0].caseId;
+  private cases: CaseData[] = [];
+  private activeCaseId: string | null = null;
   private currentScreen: ScreenView = 'patient-dashboard';
+  private isLoadingPatientCases: boolean = false;
+  private patientCasesError: string | null = null;
   private listeners: Set<() => void> = new Set();
 
   public subscribe(listener: () => void): () => void {
@@ -36,6 +79,14 @@ class CaseStore {
     return this.currentScreen;
   }
 
+  public getIsLoadingPatientCases(): boolean {
+    return this.isLoadingPatientCases;
+  }
+
+  public getPatientCasesError(): string | null {
+    return this.patientCasesError;
+  }
+
   public navigateTo(screen: ScreenView, caseId?: string): void {
     this.currentScreen = screen;
     if (caseId) {
@@ -44,41 +95,97 @@ class CaseStore {
     this.notify();
   }
 
-  public createCase(data: {
+  public async loadPatientCases(): Promise<CaseData[]> {
+    this.isLoadingPatientCases = true;
+    this.patientCasesError = null;
+    this.notify();
+
+    try {
+      const serverCases = await api.listCases();
+      if (!Array.isArray(serverCases)) {
+        throw new Error('Invalid response format: expected list of cases');
+      }
+
+      const existingCasesMap = new Map(this.cases.map((c) => [c.caseId, c]));
+      const mappedCases: CaseData[] = serverCases.map((sc: any) =>
+        mapBackendCaseToCaseData(sc, existingCasesMap.get(sc.caseId))
+      );
+
+      this.cases = mappedCases;
+      if (this.activeCaseId && !mappedCases.some((c) => c.caseId === this.activeCaseId)) {
+        this.activeCaseId = mappedCases.length > 0 ? mappedCases[0].caseId : null;
+      } else if (!this.activeCaseId && mappedCases.length > 0) {
+        this.activeCaseId = mappedCases[0].caseId;
+      }
+
+      this.isLoadingPatientCases = false;
+      this.patientCasesError = null;
+      this.notify();
+      return mappedCases;
+    } catch (err: any) {
+      this.isLoadingPatientCases = false;
+      this.patientCasesError = err?.message || 'Failed to load cases from server';
+      this.notify();
+      throw err;
+    }
+  }
+
+  public async createCase(data: {
     chiefComplaint: string;
     duration: string;
     requestedUrgency: 'routine' | 'urgent' | 'emergency';
     patientLanguage: 'en' | 'hi' | 'mr';
     symptoms?: string[];
-  }): CaseData {
-    const caseId = `case_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const idempotencyKey = `idem_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const now = new Date().toISOString();
+    knownConditions?: string;
+    medications?: string;
+    allergies?: string;
+    idempotencyKey?: string;
+  }): Promise<CaseData> {
+    const chiefComplaint = (data.chiefComplaint || '').trim();
+    const duration = (data.duration || '').trim();
+    if (!chiefComplaint || chiefComplaint.length < 5) {
+      throw new Error('Chief complaint is required and must be at least 5 characters.');
+    }
+    if (!duration || duration.length < 2) {
+      throw new Error('Duration is required and must be at least 2 characters.');
+    }
 
-    const newCase: CaseData = {
-      caseId,
-      patientId: 'patient_current_user',
-      assignedClinicianId: null,
-      assignedClinicianName: null,
+    const idempotencyKey =
+      data.idempotencyKey ||
+      `idem_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const metadata: Record<string, any> = {};
+    if (data.symptoms && Array.isArray(data.symptoms) && data.symptoms.length > 0) {
+      metadata.symptoms = data.symptoms;
+    }
+    if (data.knownConditions && data.knownConditions.trim()) {
+      metadata.knownConditions = data.knownConditions.trim();
+    }
+    if (data.medications && data.medications.trim()) {
+      metadata.medications = data.medications.trim();
+    }
+    if (data.allergies && data.allergies.trim()) {
+      metadata.allergies = data.allergies.trim();
+    }
+
+    const payload: any = {
+      chiefComplaint,
+      duration,
       requestedUrgency: data.requestedUrgency,
-      status: 'DRAFT',
+      patientLanguage: data.patientLanguage || 'en',
       idempotencyKey,
-      chiefComplaint: data.chiefComplaint,
-      duration: data.duration,
-      patientLanguage: data.patientLanguage,
-      documentCount: 0,
-      doctorBriefId: null,
-      doctorBrief: null,
-      documents: [],
-      consultationId: null,
-      consultation: null,
-      followUp: null,
-      createdAt: now,
-      updatedAt: now,
     };
+    if (Object.keys(metadata).length > 0) {
+      payload.metadata = metadata;
+    }
 
-    this.cases = [newCase, ...this.cases];
-    this.activeCaseId = caseId;
+    // Call real backend endpoint through shared API client.
+    // NO silent mock fallback: throws on backend error so the caller can handle it visibly.
+    const serverCase = await api.createCase(payload);
+
+    const newCase = mapBackendCaseToCaseData(serverCase);
+    this.cases = [newCase, ...this.cases.filter((c) => c.caseId !== newCase.caseId)];
+    this.activeCaseId = newCase.caseId;
     this.notify();
     return newCase;
   }
@@ -100,47 +207,90 @@ class CaseStore {
     this.notify();
   }
 
-  public generateDoctorBrief(caseId: string): DoctorBriefData {
-    const targetCase = this.cases.find((c) => c.caseId === caseId);
-    const now = new Date().toISOString();
-
-    const brief: DoctorBriefData = {
-      ...sampleDoctorBrief,
-      briefId: `brief_${caseId}`,
-      caseId,
-      patientReported: {
-        chiefComplaint: targetCase?.chiefComplaint || sampleDoctorBrief.patientReported.chiefComplaint,
-        symptoms: [targetCase?.chiefComplaint || 'Reported symptoms', 'Pain / Discomfort'],
-        timelineDuration: targetCase?.duration || '48 hours',
-        knownMedicalConditions: ['No chronic conditions specified'],
-        currentMedications: ['None currently reported'],
-        allergies: ['No known drug allergies reported'],
-      },
-      patientReview: {
-        status: 'pending',
-        corrections: null,
-        reviewedAt: null,
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-
+  public async generateDoctorBrief(caseId: string, confirmRegenerate: boolean = false): Promise<DoctorBrief> {
+    const serverBrief = await api.generateBrief(caseId, confirmRegenerate);
     this.cases = this.cases.map((c) => {
       if (c.caseId === caseId) {
         return {
           ...c,
-          status: 'SUBMITTED',
-          submittedAt: now,
-          doctorBriefId: brief.briefId,
-          doctorBrief: brief,
-          updatedAt: now,
+          doctorBriefId: serverBrief.briefId,
+          realDoctorBrief: serverBrief,
+          updatedAt: serverBrief.updatedAt || new Date().toISOString(),
         };
       }
       return c;
     });
-
     this.notify();
-    return brief;
+    return serverBrief;
+  }
+
+  public async getDoctorBrief(caseId: string): Promise<DoctorBrief> {
+    const serverBrief = await api.getBrief(caseId);
+    this.cases = this.cases.map((c) => {
+      if (c.caseId === caseId) {
+        return {
+          ...c,
+          doctorBriefId: serverBrief.briefId,
+          realDoctorBrief: serverBrief,
+          updatedAt: serverBrief.updatedAt || c.updatedAt,
+        };
+      }
+      return c;
+    });
+    this.notify();
+    return serverBrief;
+  }
+
+  public async updateDoctorBrief(
+    caseId: string,
+    payload: DoctorBriefEditRequest
+  ): Promise<DoctorBrief> {
+    const serverBrief = await api.updateBrief(caseId, payload);
+    this.cases = this.cases.map((c) => {
+      if (c.caseId === caseId) {
+        return {
+          ...c,
+          doctorBriefId: serverBrief.briefId,
+          realDoctorBrief: serverBrief,
+          updatedAt: serverBrief.updatedAt || new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    this.notify();
+    return serverBrief;
+  }
+
+  public async approveDoctorBrief(
+    caseId: string,
+    notes?: string
+  ): Promise<DoctorBrief> {
+    const serverBrief = await api.approveBrief(caseId, notes);
+    this.cases = this.cases.map((c) => {
+      if (c.caseId === caseId) {
+        return {
+          ...c,
+          doctorBriefId: serverBrief.briefId,
+          realDoctorBrief: serverBrief,
+          updatedAt: serverBrief.updatedAt || new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    this.notify();
+    return serverBrief;
+  }
+
+  public async refreshCase(caseId: string): Promise<CaseData | null> {
+    try {
+      const serverCase = await api.getCase(caseId);
+      const updatedCase = mapBackendCaseToCaseData(serverCase);
+      this.cases = this.cases.map((c) => (c.caseId === caseId ? { ...c, ...updatedCase } : c));
+      this.notify();
+      return updatedCase;
+    } catch {
+      return null;
+    }
   }
 
   public patientReviewBrief(caseId: string, approve: boolean, corrections?: string): void {
@@ -479,10 +629,13 @@ class CaseStore {
   }
 
   public resetToSyntheticDefaults(): void {
-    this.cases = [...initialMockCases];
-    this.activeCaseId = initialMockCases[0].caseId;
+    this.cases = [];
+    this.activeCaseId = null;
+    this.isLoadingPatientCases = false;
+    this.patientCasesError = null;
     this.currentScreen = 'patient-dashboard';
     this.notify();
+    this.loadPatientCases().catch(() => {});
   }
 }
 
@@ -499,11 +652,21 @@ export function useCaseStore() {
     cases: caseStore.getCases(),
     activeCase: caseStore.getActiveCase(),
     currentScreen: caseStore.getCurrentScreen(),
+    isLoadingPatientCases: caseStore.getIsLoadingPatientCases(),
+    patientCasesError: caseStore.getPatientCasesError(),
+    loadPatientCases: () => caseStore.loadPatientCases(),
     navigateTo: (screen: ScreenView, caseId?: string) => caseStore.navigateTo(screen, caseId),
     setActiveCaseId: (id: string | null) => caseStore.setActiveCaseId(id),
     createCase: (data: any) => caseStore.createCase(data),
     attachDocument: (caseId: string, doc: DocumentData) => caseStore.attachDocument(caseId, doc),
-    generateDoctorBrief: (caseId: string) => caseStore.generateDoctorBrief(caseId),
+    generateDoctorBrief: (caseId: string, confirmRegenerate?: boolean) =>
+      caseStore.generateDoctorBrief(caseId, confirmRegenerate),
+    getDoctorBrief: (caseId: string) => caseStore.getDoctorBrief(caseId),
+    updateDoctorBrief: (caseId: string, payload: DoctorBriefEditRequest) =>
+      caseStore.updateDoctorBrief(caseId, payload),
+    approveDoctorBrief: (caseId: string, notes?: string) =>
+      caseStore.approveDoctorBrief(caseId, notes),
+    refreshCase: (caseId: string) => caseStore.refreshCase(caseId),
     patientReviewBrief: (caseId: string, approve: boolean, corrections?: string) =>
       caseStore.patientReviewBrief(caseId, approve, corrections),
     claimCaseAtomic: (caseId: string, clinicianId: string, simulateConflict?: boolean) =>

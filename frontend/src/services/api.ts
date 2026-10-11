@@ -1,7 +1,22 @@
 import { authService } from './authService';
 import { DoctorBrief, DoctorBriefEditRequest } from '../types';
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api/v1';
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/+$/, '');
+
+function extractErrorDetail(data: any, status: number): string {
+  if (!data) return `HTTP ${status}`;
+  if (typeof data.detail === 'string') return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map((err: any) => {
+        const field = Array.isArray(err.loc) ? err.loc.slice(1).join('.') : '';
+        return field ? `${field}: ${err.msg}` : err.msg || JSON.stringify(err);
+      })
+      .join('; ');
+  }
+  if (typeof data === 'object') return JSON.stringify(data.detail || data);
+  return `HTTP ${status}`;
+}
 
 export async function authenticatedFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const token = authService.getToken();
@@ -15,7 +30,9 @@ export async function authenticatedFetch(endpoint: string, options: RequestInit 
     headers.set('Content-Type', 'application/json');
   }
 
-  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const url = endpoint.startsWith('http')
+    ? endpoint
+    : `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
   return fetch(url, {
     ...options,
     headers,
@@ -23,10 +40,25 @@ export async function authenticatedFetch(endpoint: string, options: RequestInit 
 }
 
 export const api = {
+  // Health
+  checkHealth: async () => {
+    const rootUrl = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+    const res = await fetch(`${rootUrl}/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
   // Auth
   getMyProfile: async () => {
     const res = await authenticatedFetch('/auth/me');
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.json()).detail}`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      throw new Error(errDetail);
+    }
     return res.json();
   },
 
@@ -36,15 +68,30 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.json()).detail}`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
+    }
     return res.json();
   },
 
   getCase: async (caseId: string) => {
     const res = await authenticatedFetch(`/cases/${caseId}`);
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(`HTTP ${res.status}: ${err.detail || 'Could not fetch case'}`);
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -55,7 +102,51 @@ export const api = {
     if (clinicianId) params.set('clinicianId', clinicianId);
     const query = params.toString() ? `?${params.toString()}` : '';
     const res = await authenticatedFetch(`/cases${query}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  },
+
+  submitCase: async (caseId: string, idempotencyKey?: string) => {
+    const res = await authenticatedFetch(`/cases/${caseId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  },
+
+  enqueueMatching: async (caseId: string) => {
+    const res = await authenticatedFetch(`/cases/${caseId}/matching`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        errDetail = extractErrorDetail(data, res.status);
+      } catch {}
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
+    }
     return res.json();
   },
 
@@ -68,7 +159,7 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const err = await res.json();
-        if (err.detail) errDetail = err.detail;
+        errDetail = extractErrorDetail(err, res.status);
       } catch {}
       const error: any = new Error(errDetail);
       error.status = res.status;
@@ -83,9 +174,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const err = await res.json();
-        if (err.detail) errDetail = err.detail;
+        errDetail = extractErrorDetail(err, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -99,9 +192,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const err = await res.json();
-        if (err.detail) errDetail = err.detail;
+        errDetail = extractErrorDetail(err, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -114,9 +209,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const err = await res.json();
-        if (err.detail) errDetail = err.detail;
+        errDetail = extractErrorDetail(err, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -136,9 +233,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const err = await res.json();
-        if (err.detail) errDetail = err.detail;
+        errDetail = extractErrorDetail(err, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -153,9 +252,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const data = await res.json();
-        if (data.detail) errDetail = data.detail;
+        errDetail = extractErrorDetail(data, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -166,9 +267,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const data = await res.json();
-        if (data.detail) errDetail = data.detail;
+        errDetail = extractErrorDetail(data, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -182,9 +285,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const data = await res.json();
-        if (data.detail) errDetail = data.detail;
+        errDetail = extractErrorDetail(data, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -198,9 +303,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const data = await res.json();
-        if (data.detail) errDetail = data.detail;
+        errDetail = extractErrorDetail(data, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },
@@ -214,9 +321,11 @@ export const api = {
       let errDetail = `HTTP ${res.status}`;
       try {
         const data = await res.json();
-        if (data.detail) errDetail = data.detail;
+        errDetail = extractErrorDetail(data, res.status);
       } catch {}
-      throw new Error(errDetail);
+      const error: any = new Error(errDetail);
+      error.status = res.status;
+      throw error;
     }
     return res.json();
   },

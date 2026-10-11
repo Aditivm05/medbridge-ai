@@ -105,6 +105,14 @@ class CaseCreate(BaseModel):
     requestedUrgency: RequestedUrgency
     patientLanguage: str = Field("en", description="en | hi | mr")
     idempotencyKey: str = Field(..., description="UUID to prevent duplicate case creation")
+    metadata: Optional[Dict[str, Any]] = None
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if v is None:
+            return None
+        return validate_case_metadata(v)
 
 
 class CaseUpdate(BaseModel):

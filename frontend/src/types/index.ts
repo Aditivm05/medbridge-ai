@@ -229,6 +229,7 @@ export interface CaseData {
   submittedAt?: string | null;
   acceptedAt?: string | null;
   completedAt?: string | null;
+  metadata?: Record<string, any>;
 }
 
 export interface ClinicianData {

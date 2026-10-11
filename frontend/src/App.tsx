@@ -6,6 +6,7 @@ import { LanguageCode, UserRole, ScreenView, CaseData } from './types';
 import { getTranslation } from './i18n/translations';
 import { useCaseStore } from './services/caseStore';
 import { authService, UserAuthSession } from './services/authService';
+import { api, API_BASE_URL } from './services/api';
 
 // All 7 Core Screen Components
 import { PatientDashboard } from './components/screens/PatientDashboard';
@@ -59,11 +60,13 @@ export function App() {
     cases,
     activeCase,
     currentScreen,
+    isLoadingPatientCases,
+    patientCasesError,
+    loadPatientCases,
     navigateTo,
     setActiveCaseId,
     createCase,
     attachDocument,
-    generateDoctorBrief,
     patientReviewBrief,
     claimCaseAtomic,
     declineCase,
@@ -75,19 +78,13 @@ export function App() {
 
   const t = getTranslation(language);
 
-  // Poll or check backend health
+  // Poll or check backend health using configured API base URL
   const checkBackendHealth = async () => {
     setIsLoadingHealth(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/health');
-      if (res.ok) {
-        const data = await res.json();
-        setBackendHealth(data);
-        setConnectionStatus('emulators');
-      } else {
-        setBackendHealth({ status: 'error', detail: `HTTP ${res.status}` });
-        setConnectionStatus('offline');
-      }
+      const data = await api.checkHealth();
+      setBackendHealth(data);
+      setConnectionStatus('emulators');
     } catch {
       setBackendHealth({ status: 'mock_mode', detail: 'Local mock & synthetic engine active' });
       setConnectionStatus('emulators');
@@ -100,6 +97,13 @@ export function App() {
     checkBackendHealth();
   }, []);
 
+  // Fetch patient cases from backend whenever patient session or persona changes
+  useEffect(() => {
+    if (authSession.role === 'patient') {
+      loadPatientCases().catch(() => {});
+    }
+  }, [authSession.uid, authSession.role]);
+
   // Live Security & Access Control Tests
   const runSecurityTest = async (testType: 'cross_patient' | 'unverified_clinician' | 'verified_clinician') => {
     setIsTestingSecurity(true);
@@ -107,7 +111,7 @@ export function App() {
 
     try {
       // Ensure a live test case owned by patient_demo_1 exists on backend
-      const initRes = await fetch('http://127.0.0.1:8000/api/v1/cases', {
+      const initRes = await fetch(`${API_BASE_URL}/cases`, {
         method: 'POST',
         headers: {
           Authorization: 'Bearer mock-token-patient-1',
@@ -126,7 +130,7 @@ export function App() {
 
       if (testType === 'cross_patient') {
         // Patient 2 attempts to read Patient 1's case
-        const res = await fetch(`http://127.0.0.1:8000/api/v1/cases/${testCaseId}`, {
+        const res = await fetch(`${API_BASE_URL}/cases/${testCaseId}`, {
           headers: {
             Authorization: 'Bearer mock-token-patient-2',
           },
@@ -140,17 +144,17 @@ export function App() {
         });
       } else if (testType === 'unverified_clinician') {
         // Enqueue case to matching pool first
-        await fetch(`http://127.0.0.1:8000/api/v1/cases/${testCaseId}/submit`, {
+        await fetch(`${API_BASE_URL}/cases/${testCaseId}/submit`, {
           method: 'POST',
           headers: { Authorization: 'Bearer mock-token-patient-1' },
         });
-        await fetch(`http://127.0.0.1:8000/api/v1/cases/${testCaseId}/matching`, {
+        await fetch(`${API_BASE_URL}/cases/${testCaseId}/matching`, {
           method: 'POST',
           headers: { Authorization: 'Bearer mock-token-patient-1' },
         });
 
         // Unverified clinician attempts to accept case
-        const res = await fetch(`http://127.0.0.1:8000/api/v1/cases/${testCaseId}/accept`, {
+        const res = await fetch(`${API_BASE_URL}/cases/${testCaseId}/accept`, {
           method: 'POST',
           headers: {
             Authorization: 'Bearer mock-token-clinician-unverified',
@@ -167,7 +171,7 @@ export function App() {
         });
       } else if (testType === 'verified_clinician') {
         // Verified clinician profile & claim check
-        const res = await fetch('http://127.0.0.1:8000/api/v1/auth/me', {
+        const res = await fetch(`${API_BASE_URL}/auth/me`, {
           headers: {
             Authorization: 'Bearer mock-token-clinician-verified',
           },
@@ -184,7 +188,7 @@ export function App() {
       setSecurityTestResult({
         testName: 'Network Test Error',
         statusCode: 500,
-        detail: `Could not connect to FastAPI server at http://127.0.0.1:8000: ${err.message}`,
+        detail: `Could not connect to FastAPI server at ${API_BASE_URL}: ${err.message}`,
         isPass: false,
       });
     } finally {
@@ -316,6 +320,11 @@ export function App() {
           <PatientDashboard
             cases={cases}
             language={language}
+            isLoading={isLoadingPatientCases}
+            error={patientCasesError}
+            onRefreshCases={() => {
+              loadPatientCases().catch(() => {});
+            }}
             onStartNewRequest={() => navigateTo('intake')}
             onOpenCase={handleOpenCase}
           />
@@ -325,8 +334,8 @@ export function App() {
           <IntakeScreen
             language={language}
             onBack={() => navigateTo('patient-dashboard')}
-            onSubmitIntake={(intakeData) => {
-              const newCase = createCase(intakeData);
+            onSubmitIntake={async (intakeData) => {
+              const newCase = await createCase(intakeData);
               navigateTo('upload', newCase.caseId);
             }}
           />
@@ -339,7 +348,6 @@ export function App() {
             onBack={() => navigateTo('intake')}
             onAttachDocument={(doc) => attachDocument(effectiveCase.caseId, doc)}
             onProceedToBrief={() => {
-              generateDoctorBrief(effectiveCase.caseId);
               navigateTo('brief-review', effectiveCase.caseId);
             }}
           />
